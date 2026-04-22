@@ -2,41 +2,47 @@ import cv2
 import numpy as np
 import socket
 import sys
+import time
 
 # ==========================================
 # 1. CONFIGURACIÓN
 # ==========================================
 IP_RASPBERRY = "192.168.137.240"
 PUERTO_UDP = 5005
-PUERTO_CAMARA = 2  # Asegúrate de usar el que te funciona
+PUERTO_CAMARA = 2  # Cambia a 0 o 4 si no agarra tu ROG EYE S
 
-print(f"[*] Encendiendo motor de visión en modo Headless (Sin video)...")
+print("\n" + "="*50)
+print("[*] INICIANDO SERVIDOR DE VISIÓN (MODO HEADLESS)")
+print(f"[*] Destino UDP: {IP_RASPBERRY}:{PUERTO_UDP}")
+print("="*50 + "\n")
+
 cap = cv2.VideoCapture(PUERTO_CAMARA)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 800)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 600)
 
 if not cap.isOpened():
-    print(f"[!] Error: No se pudo abrir el puerto {PUERTO_CAMARA}.")
-    exit()
+    print(f"[!] Error: No se pudo abrir la cámara en el puerto {PUERTO_CAMARA}.")
+    sys.exit()
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
 aruco_params = cv2.aruco.DetectorParameters()
 detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
 
-obj_points = np.array([[-0.0315, 0.0315, 0], [0.0315, 0.0315, 0], 
-                       [0.0315, -0.0315, 0], [-0.0315, -0.0315, 0]], dtype=np.float32)
+# Tamaño de 6.3 cm
+half = 0.063 / 2.0
+obj_points = np.array([[-half,half,0],[half,half,0],[half,-half,0],[-half,-half,0]], dtype=np.float32)
 
-print(f"[OK] Transmitiendo telemetría a {IP_RASPBERRY}:{PUERTO_UDP}")
-print("Presiona Ctrl+C en la terminal para detener el programa.\n")
+print("[OK] Transmisión en vivo. Presiona Ctrl+C para detener.\n")
 
 try:
     while True:
-        ret, frame_raw = cap.read()
-        if not ret: continue
+        ret, frame = cap.read()
+        if not ret: 
+            time.sleep(0.01)
+            continue
 
-        # Reducimos tamaño solo para aligerar la detección (sin mostrarlo)
-        frame = cv2.resize(frame_raw, (800, 600))
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
         corners, ids, _ = detector.detectMarkers(gray)
         poses_3d = {}
 
@@ -51,27 +57,40 @@ try:
                 if success:
                     poses_3d[id_val] = (tvec[0][0], tvec[1][0], tvec[2][0])
 
-            # Lógica de esquinas virtuales
+            # ==========================================
+            # LÓGICA DE ESQUINAS VIRTUALES
+            # Asumimos que Tag 1 y Tag 2 son las esquinas físicas opuestas
+            # ==========================================
             if 1 in poses_3d and 2 in poses_3d:
                 x1, y1, z1 = poses_3d[1]
                 x2, y2, z2 = poses_3d[2]
+                
+                # Generamos las esquinas 3 y 4 matemáticamente
                 poses_3d[3] = (x2, y1, z1) 
                 poses_3d[4] = (x1, y2, z1) 
 
-            # Empaquetar datos para UDP
+            # ==========================================
+            # TRANSMISIÓN UDP Y MONITOR EN TERMINAL
+            # ==========================================
             msg_parts = [f"{id_val}:{x:.4f},{y:.4f},{z:.4f}" for id_val, (x, y, z) in poses_3d.items()]
             
             if msg_parts:
-                sock.sendto("|".join(msg_parts).encode('utf-8'), (IP_RASPBERRY, PUERTO_UDP))
+                mensaje_final = "|".join(msg_parts)
+                # Enviar a la Raspberry
+                sock.sendto(mensaje_final.encode('utf-8'), (IP_RASPBERRY, PUERTO_UDP))
                 
-                # --- IMPRESIÓN EN TERMINAL A ALTA VELOCIDAD ---
-                texto_terminal = " | ".join([f"ID {id_val} (X:{x:.2f} Y:{y:.2f})" for id_val, (x, y, z) in poses_3d.items()])
-                sys.stdout.write(f"\r[Transmisión en Vivo] {texto_terminal}                                ")
+                # Imprimir en la computadora para que veas qué se está mandando
+                sys.stdout.write(f"\r[TX] Enviando: {mensaje_final}                                      ")
                 sys.stdout.flush()
 
+        else:
+            # Si no ve ningún ArUco, limpia la línea de la terminal
+            sys.stdout.write("\r[--] Buscando ArUcos...                                               ")
+            sys.stdout.flush()
+
 except KeyboardInterrupt:
-    print("\n\n[!] Transmisión detenida por el usuario.")
+    print("\n\n[!] Servidor detenido por el usuario.")
 finally:
     cap.release()
     sock.close()
-    print("Puerto de cámara liberado.")
+    print("[OK] Puertos liberados correctamente.")

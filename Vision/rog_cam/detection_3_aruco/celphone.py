@@ -1,23 +1,60 @@
 import cv2
 import numpy as np
 import math
+import threading
 from collections import deque
+
+# ==========================================
+# 0. EL SECRETO DE CERO LATENCIA (MULTITHREADING)
+# ==========================================
+class CamaraIP_UltraRapida:
+    def __init__(self, url):
+        self.stream = cv2.VideoCapture(url)
+        self.stream.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        self.stream.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        self.stream.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        
+        if not self.stream.isOpened():
+            raise Exception("No se pudo abrir DroidCam. Revisa la IP.")
+            
+        (self.grabbed, self.frame) = self.stream.read()
+        self.stopped = False
+
+    def start(self):
+        # Arranca el "ladrón de frames" en otro núcleo del procesador
+        threading.Thread(target=self.update, args=(), daemon=True).start()
+        return self
+
+    def update(self):
+        while not self.stopped:
+            if not self.grabbed:
+                self.stop()
+            else:
+                # Esto sobreescribe el frame viejo inmediatamente. CERO LAG.
+                (self.grabbed, self.frame) = self.stream.read()
+
+    def read(self):
+        return self.frame
+
+    def stop(self):
+        self.stopped = True
+        self.stream.release()
+
 
 def main():
     # --- CONFIGURACIÓN PRINCIPAL ---
     marker_size = 0.063  
-    station_threshold = 0.025  # Precisión centro a centro (2.5 cm)
+    station_threshold = 0.025  
     
-    # --- CONFIGURACIÓN DEL MINIMAPA (RADAR) ---
-    # Lo hicimos más pequeño (400x400 pixeles) para que quepa en la esquina
     ESCALA_RADAR = 150  
     CENTRO_RADAR = (200, 200)  
     estela_robot = deque(maxlen=60)  
-    
     memoria_tags = {} 
     
     camera_matrix = None
     dist_coeffs = None
+    map1, map2 = None, None  # Mapas de aceleración
+    
     aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
     aruco_params = cv2.aruco.DetectorParameters()
     detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
@@ -30,20 +67,18 @@ def main():
         [-half_size, -half_size, 0]
     ], dtype=np.float32)
 
-    # --- CONEXIÓN DE DROIDCAM ---
+    # --- INICIAR CÁMARA TURBO ---
     droidcam_url = "http://10.48.97.233:4747/video" 
-    print(f"[*] Enlazando con cámara en: {droidcam_url}")
-    cap = cv2.VideoCapture(droidcam_url)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
-    if not cap.isOpened():
-        print(f"[!] ERROR: No se pudo abrir DroidCam.")
+    print(f"[*] Conectando a {droidcam_url} en modo Multihilo...")
+    
+    try:
+        cap = CamaraIP_UltraRapida(droidcam_url).start()
+    except Exception as e:
+        print(f"[!] {e}")
         return
 
-    print("[OK] HUD con Minimapa Integrado Iniciado.")
-    print(" >> Controles: 'r' para Reiniciar memoria | 'q' para Salir")
+    print("[OK] HUD Turbo Iniciado. Máxima fluidez lograda.")
+    print(" >> Controles: 'r' para Reiniciar | 'q' para Salir")
 
     def metros_a_pixeles_radar(x_metros, y_metros):
         px = int(CENTRO_RADAR[0] + (x_metros * ESCALA_RADAR))
@@ -51,10 +86,11 @@ def main():
         return (px, py)
 
     while True:
-        cap.grab()
-        ret, cv_image_raw = cap.retrieve()
-        if not ret: continue
+        # Tomar el frame más fresco al instante
+        cv_image_raw = cap.read()
+        if cv_image_raw is None: continue
 
+        # --- OPTIMIZACIÓN: CÁLCULO DE MAPA SOLO 1 VEZ ---
         if camera_matrix is None:
             h, w = cv_image_raw.shape[:2]
             focal_length = w * 0.9 
@@ -64,14 +100,17 @@ def main():
                 [0, 0, 1]
             ], dtype=np.float32)
             dist_coeffs = np.zeros((4, 1))
+            
+            # Pre-calcular mapas de distorsión para velocidad máxima
+            map1, map2 = cv2.initUndistortRectifyMap(camera_matrix, dist_coeffs, None, camera_matrix, (w,h), cv2.CV_32FC1)
 
-        # La vista real de la cámara
-        cam_view = cv2.undistort(cv_image_raw, camera_matrix, dist_coeffs)
+        # --- OPTIMIZACIÓN: REMAP RÁPIDO EN VEZ DE UNDISTORT LENTO ---
+        cam_view = cv2.remap(cv_image_raw, map1, map2, interpolation=cv2.INTER_LINEAR)
         
-        # El lienzo del Minimapa (400x400 negro)
+        # Lienzo del Minimapa
         minimapa = np.zeros((400, 400, 3), dtype=np.uint8)
         
-        # Cuadrícula fina para el minimapa
+        # Cuadrícula fina
         for i in range(0, 400, 50):
             cv2.line(minimapa, (i, 0), (i, 400), (30, 30, 30), 1)
             cv2.line(minimapa, (0, i), (400, i), (30, 30, 30), 1)
@@ -80,7 +119,6 @@ def main():
             gray = cv2.cvtColor(cam_view, cv2.COLOR_BGR2GRAY)
             corners, ids, _ = detector.detectMarkers(gray)
 
-            # 1. ACTUALIZAR MEMORIA Y DIBUJAR MARCADORES FÍSICOS
             if ids is not None:
                 for i in range(len(ids)):
                     marker_id = int(ids[i][0])
@@ -103,9 +141,7 @@ def main():
                         color_t = (0, 165, 255) if marker_id == 0 else (0, 255, 0)
                         cv2.putText(cam_view, etiqueta, (cx - 40, cy - 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color_t, 2)
 
-            # ==========================================
-            # 2. DIBUJAR LA PISTA EN EL MINIMAPA
-            # ==========================================
+            # DIBUJAR PISTA
             if 1 in memoria_tags and 2 in memoria_tags:
                 x1, y1 = memoria_tags[1]['m_x'], memoria_tags[1]['m_y']
                 x2, y2 = memoria_tags[2]['m_x'], memoria_tags[2]['m_y']
@@ -122,9 +158,7 @@ def main():
                     cv2.circle(minimapa, pt, 5, (0, 255, 0), -1)
                     cv2.putText(minimapa, nombre, (pt[0]+8, pt[1]-8), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
 
-            # ==========================================
-            # 3. DIBUJAR ROBOT Y EVALUAR ALINEACIÓN
-            # ==========================================
+            # DIBUJAR ROBOT Y EVALUAR ALINEACIÓN
             if 0 in memoria_tags:
                 rx, ry = memoria_tags[0]['m_x'], memoria_tags[0]['m_y']
                 rc_x, rc_y = memoria_tags[0]['c_x'], memoria_tags[0]['c_y']
@@ -150,32 +184,24 @@ def main():
                     dist = math.hypot(t1_x - rx, t1_y - ry)
                     
                     if dist <= station_threshold:
-                        # REACHED VERDE
                         cv2.circle(minimapa, p_robot_radar, 15, (0, 255, 0), 2)
                         cv2.rectangle(cam_view, (t1c_x - 70, t1c_y - 90), (t1c_x + 70, t1c_y - 60), (0, 0, 255), -1)
                         cv2.putText(cam_view, "REACHED", (t1c_x - 60, t1c_y - 68), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
                     else:
-                        # RUTA ROJA
                         cv2.line(minimapa, p_robot_radar, p1_radar, (0, 0, 255), 1, cv2.LINE_AA)
                         cv2.line(cam_view, (rc_x, rc_y), (t1c_x, t1c_y), (255, 0, 255), 2, cv2.LINE_AA)
                         
                         mid_x, mid_y = int((rc_x + t1c_x)/2), int((rc_y + t1c_y)/2)
                         cv2.putText(cam_view, f"Dist: {dist:.3f}m", (mid_x + 10, mid_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-            # ==========================================
-            # 4. EFECTO PICTURE-IN-PICTURE (SOBREPONER)
-            # ==========================================
-            # Le ponemos un marco blanco delgado al minimapa para que resalte
+            # PICTURE-IN-PICTURE (SOBREPONER)
             cv2.rectangle(minimapa, (0, 0), (399, 399), (255, 255, 255), 2)
-            
-            # Pegamos el minimapa de 400x400 en la esquina superior derecha del video real
-            # Margen de 20 pixeles desde el borde
             cam_view[20:420, 1280-420:1280-20] = minimapa
 
-            # Reducir el tamaño FINAL de toda la ventana a la mitad para que no ocupe toda tu pantalla
+            # Reducir el tamaño FINAL de la ventana
             ventana_reducida = cv2.resize(cam_view, (960, 540))
 
-            cv2.imshow("Dashboard Pickasso", ventana_reducida)
+            cv2.imshow("Dashboard Pickasso (Zero Lag)", ventana_reducida)
             
             # --- MANEJO DE TECLADO ---
             tecla = cv2.waitKey(1) & 0xFF
@@ -190,7 +216,7 @@ def main():
         except Exception as e:
             print(f"[!] Error procesando vista: {e}")
 
-    cap.release()
+    cap.stop()
     cv2.destroyAllWindows()
 
 if __name__ == '__main__':

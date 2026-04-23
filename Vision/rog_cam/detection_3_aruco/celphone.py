@@ -148,6 +148,10 @@ def main():
                     
                     # [!] AQUÍ ES DONDE IMPRIMIMOS LO QUE SE ENVIARÍA A LA RASPBERRY [!]
                     print(f"\r[TX Raspberry] Target: {nombre_objetivo} | dx: {dx:+.3f} | dy: {dy:+.3f} | Dist: {dist:.3f}m   ", end="")
+                    import socket # Asegúrate de que esto esté hasta arriba de tu archivo de PC
+                    sock_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    mensaje_red = f"{dx},{dy},{dist}"
+                    sock_udp.sendto(mensaje_red.encode('utf-8'), ("192.168.137.240", 5005)) # Pon la IP correcta de tu Raspberry
 
                     # Dibujar línea hacia el objetivo en el radar
                     cv2.line(minimapa, p_robot_radar, metros_a_pixeles_radar(tx, ty), (0, 255, 255), 2)

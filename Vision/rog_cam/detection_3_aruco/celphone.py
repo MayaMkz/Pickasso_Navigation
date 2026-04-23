@@ -8,13 +8,12 @@ def main():
     marker_size = 0.063  
     station_threshold = 0.025  # Precisión centro a centro (2.5 cm)
     
-    # --- CONFIGURACIÓN DEL RADAR VISUAL ---
-    ESCALA_RADAR = 300  
-    CENTRO_RADAR = (400, 400)  
+    # --- CONFIGURACIÓN DEL MINIMAPA (RADAR) ---
+    # Lo hicimos más pequeño (400x400 pixeles) para que quepa en la esquina
+    ESCALA_RADAR = 150  
+    CENTRO_RADAR = (200, 200)  
     estela_robot = deque(maxlen=60)  
     
-    # MEMORIA DEL SISTEMA
-    # Ahora guarda X, Y (en metros) y px, py (pixeles de la cámara)
     memoria_tags = {} 
     
     camera_matrix = None
@@ -43,7 +42,7 @@ def main():
         print(f"[!] ERROR: No se pudo abrir DroidCam.")
         return
 
-    print("[OK] Sistema de Doble Monitor Iniciado.")
+    print("[OK] HUD con Minimapa Integrado Iniciado.")
     print(" >> Controles: 'r' para Reiniciar memoria | 'q' para Salir")
 
     def metros_a_pixeles_radar(x_metros, y_metros):
@@ -66,14 +65,16 @@ def main():
             ], dtype=np.float32)
             dist_coeffs = np.zeros((4, 1))
 
-        # Crear lienzos para las dos pantallas
+        # La vista real de la cámara
         cam_view = cv2.undistort(cv_image_raw, camera_matrix, dist_coeffs)
-        dashboard = np.zeros((800, 800, 3), dtype=np.uint8)
         
-        # Cuadrícula del radar
-        for i in range(0, 800, 100):
-            cv2.line(dashboard, (i, 0), (i, 800), (30, 30, 30), 1)
-            cv2.line(dashboard, (0, i), (800, i), (30, 30, 30), 1)
+        # El lienzo del Minimapa (400x400 negro)
+        minimapa = np.zeros((400, 400, 3), dtype=np.uint8)
+        
+        # Cuadrícula fina para el minimapa
+        for i in range(0, 400, 50):
+            cv2.line(minimapa, (i, 0), (i, 400), (30, 30, 30), 1)
+            cv2.line(minimapa, (0, i), (400, i), (30, 30, 30), 1)
 
         try:
             gray = cv2.cvtColor(cam_view, cv2.COLOR_BGR2GRAY)
@@ -87,17 +88,14 @@ def main():
                         obj_points, corners[i][0], camera_matrix, dist_coeffs, flags=cv2.SOLVEPNP_IPPE_SQUARE
                     )
                     if success:
-                        # Centro en pixeles de la cámara real
                         cx = int(np.mean(corners[i][0][:, 0]))
                         cy = int(np.mean(corners[i][0][:, 1]))
                         
-                        # Guardar en memoria: X(m), Y(m), px_camara, py_camara
                         memoria_tags[marker_id] = {
                             'm_x': tvec[0][0], 'm_y': tvec[1][0],
                             'c_x': cx, 'c_y': cy
                         }
 
-                        # Dibujar contornos solo en la vista de la cámara
                         cv2.aruco.drawDetectedMarkers(cam_view, corners)
                         cv2.drawFrameAxes(cam_view, camera_matrix, dist_coeffs, rvec, tvec, marker_size)
                         
@@ -106,53 +104,44 @@ def main():
                         cv2.putText(cam_view, etiqueta, (cx - 40, cy - 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color_t, 2)
 
             # ==========================================
-            # 2. DIBUJAR LA PISTA EN EL RADAR (Tag 1 y 2)
+            # 2. DIBUJAR LA PISTA EN EL MINIMAPA
             # ==========================================
             if 1 in memoria_tags and 2 in memoria_tags:
                 x1, y1 = memoria_tags[1]['m_x'], memoria_tags[1]['m_y']
                 x2, y2 = memoria_tags[2]['m_x'], memoria_tags[2]['m_y']
                 
-                # Convertir a pixeles del radar
                 p1 = metros_a_pixeles_radar(x1, y1)
                 p2 = metros_a_pixeles_radar(x2, y2)
                 p3 = metros_a_pixeles_radar(x2, y1)
                 p4 = metros_a_pixeles_radar(x1, y2)
                 
-                # Trazar rectángulo en el radar
                 puntos_circ = np.array([p1, p3, p2, p4], np.int32).reshape((-1, 1, 2))
-                cv2.polylines(dashboard, [puntos_circ], isClosed=True, color=(200, 200, 200), thickness=2)
+                cv2.polylines(minimapa, [puntos_circ], isClosed=True, color=(200, 200, 200), thickness=2)
                 
-                for pt, nombre in zip([p1, p2], ["Tag 1", "Tag 2"]):
-                    cv2.circle(dashboard, pt, 8, (0, 255, 0), -1)
-                    cv2.putText(dashboard, nombre, (pt[0]+15, pt[1]-15), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                for pt, nombre in zip([p1, p2], ["1", "2"]):
+                    cv2.circle(minimapa, pt, 5, (0, 255, 0), -1)
+                    cv2.putText(minimapa, nombre, (pt[0]+8, pt[1]-8), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
 
             # ==========================================
-            # 3. DIBUJAR ROBOT Y EVALUAR ALINEACIÓN EN AMBAS PANTALLAS
+            # 3. DIBUJAR ROBOT Y EVALUAR ALINEACIÓN
             # ==========================================
             if 0 in memoria_tags:
-                # Datos del Robot
                 rx, ry = memoria_tags[0]['m_x'], memoria_tags[0]['m_y']
                 rc_x, rc_y = memoria_tags[0]['c_x'], memoria_tags[0]['c_y']
                 
                 p_robot_radar = metros_a_pixeles_radar(rx, ry)
                 
-                # --- RADAR: Estela e ícono ---
                 if not estela_robot or estela_robot[-1] != p_robot_radar:
                     estela_robot.append(p_robot_radar)
                     
                 if len(estela_robot) > 1:
                     for i in range(1, len(estela_robot)):
-                        grosor = int(np.interp(i, [0, len(estela_robot)], [1, 4]))
-                        cv2.line(dashboard, estela_robot[i-1], estela_robot[i], (0, 100, 255), grosor)
+                        grosor = int(np.interp(i, [0, len(estela_robot)], [1, 3]))
+                        cv2.line(minimapa, estela_robot[i-1], estela_robot[i], (0, 100, 255), grosor)
 
-                cv2.circle(dashboard, p_robot_radar, 12, (0, 165, 255), -1)
-                cv2.circle(dashboard, p_robot_radar, 16, (0, 165, 255), 1) 
-                cv2.putText(dashboard, f"PICKASSO X:{rx:.2f}m Y:{ry:.2f}m", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 2)
-
-                # --- CÁMARA REAL: Punto central de memoria del robot ---
+                cv2.circle(minimapa, p_robot_radar, 8, (0, 165, 255), -1)
                 cv2.circle(cam_view, (rc_x, rc_y), 5, (0, 165, 255), -1)
 
-                # Si tenemos el Tag 1 en memoria, trazar la ruta hacia él
                 if 1 in memoria_tags:
                     t1_x, t1_y = memoria_tags[1]['m_x'], memoria_tags[1]['m_y']
                     t1c_x, t1c_y = memoria_tags[1]['c_x'], memoria_tags[1]['c_y']
@@ -161,27 +150,32 @@ def main():
                     dist = math.hypot(t1_x - rx, t1_y - ry)
                     
                     if dist <= station_threshold:
-                        # [ALERTA REACHED - EN RADAR]
-                        cv2.circle(dashboard, p_robot_radar, 30, (0, 255, 0), 3)
-                        cv2.putText(dashboard, "ALINEACION PERFECTA (REACHED)", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 3)
-                        
-                        # [ALERTA REACHED - EN CAMARA REAL]
+                        # REACHED VERDE
+                        cv2.circle(minimapa, p_robot_radar, 15, (0, 255, 0), 2)
                         cv2.rectangle(cam_view, (t1c_x - 70, t1c_y - 90), (t1c_x + 70, t1c_y - 60), (0, 0, 255), -1)
                         cv2.putText(cam_view, "REACHED", (t1c_x - 60, t1c_y - 68), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
                     else:
-                        # [DIBUJAR RUTA - EN RADAR]
-                        cv2.line(dashboard, p_robot_radar, p1_radar, (0, 0, 255), 1, cv2.LINE_AA)
-                        cv2.putText(dashboard, f"Distancia Centro-Centro: {dist:.3f}m", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                        
-                        # [DIBUJAR RUTA - EN CAMARA REAL]
+                        # RUTA ROJA
+                        cv2.line(minimapa, p_robot_radar, p1_radar, (0, 0, 255), 1, cv2.LINE_AA)
                         cv2.line(cam_view, (rc_x, rc_y), (t1c_x, t1c_y), (255, 0, 255), 2, cv2.LINE_AA)
-                        cv2.circle(cam_view, (t1c_x, t1c_y), 5, (0, 255, 0), -1)
+                        
                         mid_x, mid_y = int((rc_x + t1c_x)/2), int((rc_y + t1c_y)/2)
                         cv2.putText(cam_view, f"Dist: {dist:.3f}m", (mid_x + 10, mid_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-            # --- MOSTRAR LAS DOS PANTALLAS ---
-            cv2.imshow("1. Camara Real (Pickasso)", cam_view)
-            cv2.imshow("2. Telemetria Radar", dashboard)
+            # ==========================================
+            # 4. EFECTO PICTURE-IN-PICTURE (SOBREPONER)
+            # ==========================================
+            # Le ponemos un marco blanco delgado al minimapa para que resalte
+            cv2.rectangle(minimapa, (0, 0), (399, 399), (255, 255, 255), 2)
+            
+            # Pegamos el minimapa de 400x400 en la esquina superior derecha del video real
+            # Margen de 20 pixeles desde el borde
+            cam_view[20:420, 1280-420:1280-20] = minimapa
+
+            # Reducir el tamaño FINAL de toda la ventana a la mitad para que no ocupe toda tu pantalla
+            ventana_reducida = cv2.resize(cam_view, (960, 540))
+
+            cv2.imshow("Dashboard Pickasso", ventana_reducida)
             
             # --- MANEJO DE TECLADO ---
             tecla = cv2.waitKey(1) & 0xFF

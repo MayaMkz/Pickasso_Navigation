@@ -34,12 +34,11 @@ class CamaraIP_UltraRapida:
 # PROGRAMA PRINCIPAL
 # ==========================================
 def main():
-    # --- CONFIGURACIÓN DE RED (¡CAMBIA ESTO!) ---
-    DROIDCAM_URL = "http://10.48.97.233:4747/video"  # IP de tu celular Samsung
-    IP_RASPBERRY = "192.168.137.240"                 # IP de tu Raspberry Pi
+    # --- CONFIGURACIÓN DE RED ---
+    DROIDCAM_URL = "http://10.48.97.233:4747/video" 
+    IP_RASPBERRY = "192.168.137.240" 
     PUERTO_UDP = 5005
 
-    # --- INICIAR COMUNICACIONES ---
     print(f"[*] Conectando a Cámara en {DROIDCAM_URL}...")
     try: cap = CamaraIP_UltraRapida(DROIDCAM_URL).start()
     except Exception as e: print(f"[!] {e}"); return
@@ -49,7 +48,7 @@ def main():
 
     # --- CONFIGURACIÓN LÓGICA Y VISUAL ---
     marker_size = 0.063  
-    station_threshold = 0.025  # Precisión 2.5 cm
+    station_threshold = 0.05  # 5 cm para dar por válido el punto y girar al siguiente
     
     ESCALA_RADAR = 150  
     CENTRO_RADAR = (200, 200)  
@@ -72,8 +71,8 @@ def main():
     obj_points = np.array([[-half_size, half_size, 0], [half_size, half_size, 0], 
                            [half_size, -half_size, 0], [-half_size, -half_size, 0]], dtype=np.float32)
 
-    print("[OK] Dashboard y Controlador Iniciado.")
-    print(" >> Controles: 's' Iniciar Misión | 'r' Reiniciar Memoria | 'q' Salir")
+    print("[OK] Dashboard Listo.")
+    print(" >> Controles: 's' Iniciar Misión | 'r' Reiniciar | 'q' Salir")
 
     def metros_a_pixeles_radar(x, y):
         return (int(CENTRO_RADAR[0] + (x * ESCALA_RADAR)), int(CENTRO_RADAR[1] - (y * ESCALA_RADAR)))
@@ -133,29 +132,29 @@ def main():
             cv2.circle(minimapa, p_robot_radar, 8, (0, 165, 255), -1)
             cv2.circle(cam_view, (memoria_tags[0]['c_x'], memoria_tags[0]['c_y']), 5, (0, 165, 255), -1)
 
-            # MÁQUINA DE ESTADOS (LA SECUENCIA)
+            # MÁQUINA DE ESTADOS (LA SECUENCIA EXACTA DE TU DIBUJO)
             if mision_activa and 1 in memoria_tags and 2 in memoria_tags:
                 if estado_mision == 1:
                     objetivo_actual = (memoria_tags[1]['m_x'], memoria_tags[1]['m_y'])
                     nombre_objetivo = "1. Tag 1"
                 elif estado_mision == 2:
+                    # Virtual 1 (Cruce de Tag 2 y Tag 1)
                     objetivo_actual = (memoria_tags[2]['m_x'], memoria_tags[1]['m_y'])
-                    nombre_objetivo = "2. Virtual 1"
+                    nombre_objetivo = "2. Esquina Virtual"
                 elif estado_mision == 3:
                     objetivo_actual = (memoria_tags[2]['m_x'], memoria_tags[2]['m_y'])
                     nombre_objetivo = "3. Tag 2"
                 elif estado_mision == 4:
                     objetivo_actual = posicion_home
-                    nombre_objetivo = "4. Return Home"
+                    nombre_objetivo = "4. Regreso a Casa"
 
-                # Calcular distancias y ENVIAR ÓRDENES
+                # ENVIAR ÓRDENES
                 if objetivo_actual:
                     tx, ty = objetivo_actual
                     dx = tx - rx
                     dy = ty - ry
                     dist = math.hypot(dx, dy)
                     
-                    # [!] SE ENVÍA EL DATO A LA RASPBERRY [!]
                     print(f"\r[TX] Target: {nombre_objetivo} | dx: {dx:+.3f} | dy: {dy:+.3f} | Dist: {dist:.3f}m   ", end="")
                     mensaje_red = f"{dx},{dy},{dist}"
                     sock_udp.sendto(mensaje_red.encode('utf-8'), (IP_RASPBERRY, PUERTO_UDP))
@@ -164,11 +163,11 @@ def main():
                     cv2.putText(minimapa, f"Target: {nombre_objetivo}", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
 
                     if dist <= station_threshold:
-                        print(f"\n[!] Checkpoint '{nombre_objetivo}' Alcanzado.")
+                        print(f"\n[!] {nombre_objetivo} Alcanzado. Girando al siguiente...")
                         estado_mision += 1
                         if estado_mision > 4:
                             mision_activa = False
-                            print("\n[★★★] MISION COMPLETADA [★★★]\n")
+                            print("\n[★★★] RECTANGULO COMPLETADO [★★★]\n")
 
         # PICTURE-IN-PICTURE Y VISUALIZACIÓN
         cv2.rectangle(minimapa, (0, 0), (399, 399), (255, 255, 255), 2)
@@ -179,7 +178,7 @@ def main():
         cv2.putText(cam_view, texto_estado, (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, color_estado, 3)
 
         ventana_reducida = cv2.resize(cam_view, (960, 540))
-        cv2.imshow("Dashboard Pickasso (Maestro)", ventana_reducida)
+        cv2.imshow("Dashboard Pickasso", ventana_reducida)
         
         tecla = cv2.waitKey(1) & 0xFF
         if tecla == ord('q'): break
@@ -191,7 +190,7 @@ def main():
                 posicion_home = (memoria_tags[0]['m_x'], memoria_tags[0]['m_y'])
                 mision_activa = True
                 estado_mision = 1
-                print("\n\n[>>>] INICIANDO SECUENCIA LOGISTICA [>>>]")
+                print("\n\n[>>>] INICIANDO RUTEO DE RECTANGULO [>>>]")
             else:
                 print("\n[X] Error: La cámara necesita ver el Robot, el Tag 1 y el Tag 2 para arrancar.")
 

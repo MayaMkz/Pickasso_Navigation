@@ -1,10 +1,13 @@
-import cv2
+ import cv2
 import numpy as np
 import math
 import threading
 import socket
 from collections import deque
 
+# ==========================================
+# CÁMARA TURBO (CERO LATENCIA)
+# ==========================================
 class CamaraIP_UltraRapida:
     def __init__(self, url):
         self.stream = cv2.VideoCapture(url)
@@ -27,11 +30,18 @@ class CamaraIP_UltraRapida:
     def read(self): return self.frame
     def stop(self): self.stopped = True; self.stream.release()
 
+# ==========================================
+# PROGRAMA PRINCIPAL
+# ==========================================
 def main():
-    # --- CONFIGURACIÓN DE RED ---
+    # --- CONFIGURACIÓN DE RED Y PARÁMETROS PRINCIPALES ---
     DROIDCAM_URL = "http://10.48.97.233:4747/video"  
     IP_RASPBERRY = "192.168.137.240"                 
     PUERTO_UDP = 5005
+
+    # [!] AJUSTE DE TOLERANCIA [!]
+    # 0.05 = 5 cm de radio de captura. Cámbialo aquí según tus pruebas.
+    TOLERANCIA_LLEGADA_M = 0.05 
 
     print(f"[*] Conectando a Cámara en {DROIDCAM_URL}...")
     try: cap = CamaraIP_UltraRapida(DROIDCAM_URL).start()
@@ -42,7 +52,6 @@ def main():
 
     # --- CONFIGURACIÓN LÓGICA ---
     marker_size = 0.063  
-    station_threshold = 0.05  
     
     ESCALA_RADAR = 150  
     CENTRO_RADAR = (200, 200)  
@@ -51,7 +60,7 @@ def main():
     
     mision_activa = False
     estado_mision = 0  
-    posicion_home = None # Aquí guardaremos la posición inicial
+    posicion_home = None 
     objetivo_actual = None
     nombre_objetivo = ""
 
@@ -65,7 +74,7 @@ def main():
     obj_points = np.array([[-half_size, half_size, 0], [half_size, half_size, 0], 
                            [half_size, -half_size, 0], [-half_size, -half_size, 0]], dtype=np.float32)
 
-    print("[OK] Dashboard Listo. Generación de cuadro activada.")
+    print(f"[OK] Dashboard Listo. Tolerancia actual: {TOLERANCIA_LLEGADA_M*100} cm")
 
     def metros_a_pixeles_radar(x, y):
         return (int(CENTRO_RADAR[0] + (x * ESCALA_RADAR)), int(CENTRO_RADAR[1] - (y * ESCALA_RADAR)))
@@ -107,10 +116,8 @@ def main():
             t1x, t1y = memoria_tags[1]['m_x'], memoria_tags[1]['m_y']
             t2x, t2y = memoria_tags[2]['m_x'], memoria_tags[2]['m_y']
             
-            # Esquina virtual (cruzando X del 2 y Y del 1 según tu diagrama)
             vx, vy = t2x, t1y 
 
-            # Dibujamos el cuadro desde la Posición Home guardada (si existe)
             if posicion_home:
                 hx, hy = posicion_home
                 pt_home = metros_a_pixeles_radar(hx, hy)
@@ -147,7 +154,7 @@ def main():
                     objetivo_actual = (t2x, t2y)
                     nombre_objetivo = "3. Estacion 2"
                 elif estado_mision == 4:
-                    objetivo_actual = posicion_home # Regresa exactamente a donde arrancó
+                    objetivo_actual = posicion_home 
                     nombre_objetivo = "4. Posicion Inicial (HOME)"
 
                 if objetivo_actual:
@@ -160,10 +167,19 @@ def main():
                     mensaje_red = f"{dx},{dy},{dist}"
                     sock_udp.sendto(mensaje_red.encode('utf-8'), (IP_RASPBERRY, PUERTO_UDP))
 
-                    cv2.line(minimapa, p_robot_radar, metros_a_pixeles_radar(tx, ty), (0, 255, 255), 2)
+                    pt_objetivo_radar = metros_a_pixeles_radar(tx, ty)
+                    
+                    # Dibujar línea láser hacia el objetivo
+                    cv2.line(minimapa, p_robot_radar, pt_objetivo_radar, (0, 255, 255), 2)
+                    
+                    # Dibujar el "Hitbox" (Círculo de tolerancia visual)
+                    radio_tolerancia_px = int(TOLERANCIA_LLEGADA_M * ESCALA_RADAR)
+                    cv2.circle(minimapa, pt_objetivo_radar, radio_tolerancia_px, (0, 255, 100), 1)
+                    
                     cv2.putText(minimapa, f"Target: {nombre_objetivo}", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
 
-                    if dist <= station_threshold:
+                    # Evaluación del Hitbox
+                    if dist <= TOLERANCIA_LLEGADA_M:
                         print(f"\n[!] {nombre_objetivo} Alcanzado.")
                         estado_mision += 1
                         if estado_mision > 4:
@@ -186,12 +202,10 @@ def main():
             print("\n[!] Memoria reiniciada.")
         elif tecla == ord('s') and not mision_activa:
             if 0 in memoria_tags and 1 in memoria_tags and 2 in memoria_tags:
-                # CAPTURA DE LA POSICION INICIAL AL PRESIONAR 'S'
                 posicion_home = (memoria_tags[0]['m_x'], memoria_tags[0]['m_y'])
                 mision_activa = True
                 estado_mision = 1
                 print("\n\n[>>>] INICIANDO RUTEO DE CUADRADO [>>>]")
-                print(f"[*] Posición Inicial guardada en: X:{posicion_home[0]:.2f}, Y:{posicion_home[1]:.2f}")
             else:
                 print("\n[X] Error: La cámara necesita ver el Robot, Tag 1 y Tag 2 para arrancar.")
 

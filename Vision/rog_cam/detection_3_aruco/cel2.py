@@ -35,20 +35,20 @@ class CamaraIP_UltraRapida:
 # ==========================================
 def main():
     # --- CONFIGURACIÓN DE RED ---
-    DROIDCAM_URL = "http://10.48.97.233:4747/video" 
-    IP_RASPBERRY = "192.168.137.240" 
+    DROIDCAM_URL = "http://10.48.97.233:4747/video"  
+    IP_RASPBERRY = "192.168.137.240"                 
     PUERTO_UDP = 5005
 
     print(f"[*] Conectando a Cámara en {DROIDCAM_URL}...")
     try: cap = CamaraIP_UltraRapida(DROIDCAM_URL).start()
     except Exception as e: print(f"[!] {e}"); return
 
-    print(f"[*] Abriendo canal de datos hacia Raspberry Pi en {IP_RASPBERRY}:{PUERTO_UDP}...")
+    print(f"[*] Abriendo canal UDP hacia {IP_RASPBERRY}:{PUERTO_UDP}...")
     sock_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-    # --- CONFIGURACIÓN LÓGICA Y VISUAL ---
+    # --- CONFIGURACIÓN LÓGICA ---
     marker_size = 0.063  
-    station_threshold = 0.05  # 5 cm para dar por válido el punto y girar al siguiente
+    station_threshold = 0.05  # 5 cm de precisión
     
     ESCALA_RADAR = 150  
     CENTRO_RADAR = (200, 200)  
@@ -57,7 +57,6 @@ def main():
     
     mision_activa = False
     estado_mision = 0  
-    posicion_home = None
     objetivo_actual = None
     nombre_objetivo = ""
 
@@ -72,7 +71,6 @@ def main():
                            [half_size, -half_size, 0], [-half_size, -half_size, 0]], dtype=np.float32)
 
     print("[OK] Dashboard Listo.")
-    print(" >> Controles: 's' Iniciar Misión | 'r' Reiniciar | 'q' Salir")
 
     def metros_a_pixeles_radar(x, y):
         return (int(CENTRO_RADAR[0] + (x * ESCALA_RADAR)), int(CENTRO_RADAR[1] - (y * ESCALA_RADAR)))
@@ -98,7 +96,7 @@ def main():
         gray = cv2.cvtColor(cam_view, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = detector.detectMarkers(gray)
 
-        # 1. ACTUALIZAR MEMORIA Y DIBUJAR TAGS FÍSICOS
+        # 1. ACTUALIZAR MEMORIA Y DIBUJAR TAGS
         if ids is not None:
             for i in range(len(ids)):
                 m_id = int(ids[i][0])
@@ -106,19 +104,23 @@ def main():
                 if success:
                     cx, cy = int(np.mean(corners[i][0][:, 0])), int(np.mean(corners[i][0][:, 1]))
                     memoria_tags[m_id] = {'m_x': tvec[0][0], 'm_y': tvec[1][0], 'c_x': cx, 'c_y': cy}
-                    
                     cv2.aruco.drawDetectedMarkers(cam_view, corners)
                     color = (0, 165, 255) if m_id == 0 else (0, 255, 0)
                     cv2.putText(cam_view, f"Tag {m_id}" if m_id!=0 else "Robot", (cx-40, cy-40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
-        # 2. DIBUJAR PISTA EN EL RADAR
+        # 2. DIBUJAR CIRCUITO RECTANGULAR
         if 1 in memoria_tags and 2 in memoria_tags:
             x1, y1 = memoria_tags[1]['m_x'], memoria_tags[1]['m_y']
             x2, y2 = memoria_tags[2]['m_x'], memoria_tags[2]['m_y']
             
-            puntos_circ = np.array([metros_a_pixeles_radar(x1, y1), metros_a_pixeles_radar(x2, y1), 
-                                    metros_a_pixeles_radar(x2, y2), metros_a_pixeles_radar(x1, y2)], np.int32).reshape((-1, 1, 2))
-            cv2.polylines(minimapa, [puntos_circ], isClosed=True, color=(100, 100, 100), thickness=1)
+            # Esquinas exactas del rectángulo según tu diagrama
+            pt1 = metros_a_pixeles_radar(x1, y1) # Tag 1
+            pt2 = metros_a_pixeles_radar(x2, y1) # Virtual 1
+            pt3 = metros_a_pixeles_radar(x2, y2) # Tag 2
+            pt4 = metros_a_pixeles_radar(x1, y2) # Virtual 2 (Inicio)
+
+            puntos_circ = np.array([pt1, pt2, pt3, pt4], np.int32).reshape((-1, 1, 2))
+            cv2.polylines(minimapa, [puntos_circ], isClosed=True, color=(100, 100, 100), thickness=2)
 
         # 3. LÓGICA DE SECUENCIA Y NAVEGACIÓN
         if 0 in memoria_tags:
@@ -132,21 +134,23 @@ def main():
             cv2.circle(minimapa, p_robot_radar, 8, (0, 165, 255), -1)
             cv2.circle(cam_view, (memoria_tags[0]['c_x'], memoria_tags[0]['c_y']), 5, (0, 165, 255), -1)
 
-            # MÁQUINA DE ESTADOS (LA SECUENCIA EXACTA DE TU DIBUJO)
+            # MÁQUINA DE ESTADOS (Las 4 líneas rojas de tu dibujo)
             if mision_activa and 1 in memoria_tags and 2 in memoria_tags:
+                x1, y1 = memoria_tags[1]['m_x'], memoria_tags[1]['m_y']
+                x2, y2 = memoria_tags[2]['m_x'], memoria_tags[2]['m_y']
+
                 if estado_mision == 1:
-                    objetivo_actual = (memoria_tags[1]['m_x'], memoria_tags[1]['m_y'])
+                    objetivo_actual = (x1, y1)
                     nombre_objetivo = "1. Tag 1"
                 elif estado_mision == 2:
-                    # Virtual 1 (Cruce de Tag 2 y Tag 1)
-                    objetivo_actual = (memoria_tags[2]['m_x'], memoria_tags[1]['m_y'])
-                    nombre_objetivo = "2. Esquina Virtual"
+                    objetivo_actual = (x2, y1)
+                    nombre_objetivo = "2. Virtual 1"
                 elif estado_mision == 3:
-                    objetivo_actual = (memoria_tags[2]['m_x'], memoria_tags[2]['m_y'])
+                    objetivo_actual = (x2, y2)
                     nombre_objetivo = "3. Tag 2"
                 elif estado_mision == 4:
-                    objetivo_actual = posicion_home
-                    nombre_objetivo = "4. Regreso a Casa"
+                    objetivo_actual = (x1, y2)
+                    nombre_objetivo = "4. Retorno a Inicio"
 
                 # ENVIAR ÓRDENES
                 if objetivo_actual:
@@ -163,7 +167,7 @@ def main():
                     cv2.putText(minimapa, f"Target: {nombre_objetivo}", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
 
                     if dist <= station_threshold:
-                        print(f"\n[!] {nombre_objetivo} Alcanzado. Girando al siguiente...")
+                        print(f"\n[!] {nombre_objetivo} Alcanzado.")
                         estado_mision += 1
                         if estado_mision > 4:
                             mision_activa = False
@@ -173,12 +177,11 @@ def main():
         cv2.rectangle(minimapa, (0, 0), (399, 399), (255, 255, 255), 2)
         cam_view[20:420, 1280-420:1280-20] = minimapa
 
-        texto_estado = "MISION EN CURSO" if mision_activa else ("ESPERANDO (Presiona 's')" if 1 in memoria_tags and 2 in memoria_tags else "FALTAN TAGS")
+        texto_estado = "MISION EN CURSO" if mision_activa else ("ESPERANDO (Presiona 's')")
         color_estado = (0, 255, 0) if mision_activa else (0, 0, 255)
         cv2.putText(cam_view, texto_estado, (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, color_estado, 3)
 
-        ventana_reducida = cv2.resize(cam_view, (960, 540))
-        cv2.imshow("Dashboard Pickasso", ventana_reducida)
+        cv2.imshow("Dashboard Pickasso (Maestro)", cv2.resize(cam_view, (960, 540)))
         
         tecla = cv2.waitKey(1) & 0xFF
         if tecla == ord('q'): break
@@ -187,12 +190,11 @@ def main():
             print("\n[!] Memoria reiniciada.")
         elif tecla == ord('s') and not mision_activa:
             if 0 in memoria_tags and 1 in memoria_tags and 2 in memoria_tags:
-                posicion_home = (memoria_tags[0]['m_x'], memoria_tags[0]['m_y'])
                 mision_activa = True
                 estado_mision = 1
                 print("\n\n[>>>] INICIANDO RUTEO DE RECTANGULO [>>>]")
             else:
-                print("\n[X] Error: La cámara necesita ver el Robot, el Tag 1 y el Tag 2 para arrancar.")
+                print("\n[X] Error: La cámara necesita ver el Robot, Tag 1 y Tag 2 para arrancar.")
 
     cap.stop(); cv2.destroyAllWindows(); sock_udp.close()
 

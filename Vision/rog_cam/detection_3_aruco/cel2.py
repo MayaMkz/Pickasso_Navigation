@@ -42,7 +42,7 @@ def main():
 
     # --- CONFIGURACIÓN LÓGICA ---
     marker_size = 0.063  
-    station_threshold = 0.05  # 5 cm de tolerancia para girar al siguiente punto
+    station_threshold = 0.05  
     
     ESCALA_RADAR = 150  
     CENTRO_RADAR = (200, 200)  
@@ -51,6 +51,7 @@ def main():
     
     mision_activa = False
     estado_mision = 0  
+    posicion_home = None # Aquí guardaremos la posición inicial
     objetivo_actual = None
     nombre_objetivo = ""
 
@@ -64,7 +65,7 @@ def main():
     obj_points = np.array([[-half_size, half_size, 0], [half_size, half_size, 0], 
                            [half_size, -half_size, 0], [-half_size, -half_size, 0]], dtype=np.float32)
 
-    print("[OK] Dashboard Listo.")
+    print("[OK] Dashboard Listo. Generación de cuadro activada.")
 
     def metros_a_pixeles_radar(x, y):
         return (int(CENTRO_RADAR[0] + (x * ESCALA_RADAR)), int(CENTRO_RADAR[1] - (y * ESCALA_RADAR)))
@@ -101,18 +102,24 @@ def main():
                     color = (0, 165, 255) if m_id == 0 else (0, 255, 0)
                     cv2.putText(cam_view, f"Tag {m_id}" if m_id!=0 else "Robot", (cx-40, cy-40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
+        # 2. DIBUJAR PISTA EN EL RADAR (Basado en el cuadro estricto)
         if 1 in memoria_tags and 2 in memoria_tags:
-            x1, y1 = memoria_tags[1]['m_x'], memoria_tags[1]['m_y']
-            x2, y2 = memoria_tags[2]['m_x'], memoria_tags[2]['m_y']
+            t1x, t1y = memoria_tags[1]['m_x'], memoria_tags[1]['m_y']
+            t2x, t2y = memoria_tags[2]['m_x'], memoria_tags[2]['m_y']
             
-            # Las 4 esquinas geométricas de tu dibujo
-            pt1 = metros_a_pixeles_radar(x1, y1) # Tag 1
-            pt2 = metros_a_pixeles_radar(x2, y1) # Virtual 1
-            pt3 = metros_a_pixeles_radar(x2, y2) # Tag 2
-            pt4 = metros_a_pixeles_radar(x1, y2) # Virtual 2 (Inicio)
+            # Esquina virtual (cruzando X del 2 y Y del 1 según tu diagrama)
+            vx, vy = t2x, t1y 
 
-            puntos_circ = np.array([pt1, pt2, pt3, pt4], np.int32).reshape((-1, 1, 2))
-            cv2.polylines(minimapa, [puntos_circ], isClosed=True, color=(100, 100, 100), thickness=2)
+            # Dibujamos el cuadro desde la Posición Home guardada (si existe)
+            if posicion_home:
+                hx, hy = posicion_home
+                pt_home = metros_a_pixeles_radar(hx, hy)
+                pt_tag1 = metros_a_pixeles_radar(t1x, t1y)
+                pt_virt = metros_a_pixeles_radar(vx, vy)
+                pt_tag2 = metros_a_pixeles_radar(t2x, t2y)
+
+                puntos_circ = np.array([pt_home, pt_tag1, pt_virt, pt_tag2], np.int32).reshape((-1, 1, 2))
+                cv2.polylines(minimapa, [puntos_circ], isClosed=True, color=(100, 100, 100), thickness=2)
 
         if 0 in memoria_tags:
             rx, ry = memoria_tags[0]['m_x'], memoria_tags[0]['m_y']
@@ -125,23 +132,23 @@ def main():
             cv2.circle(minimapa, p_robot_radar, 8, (0, 165, 255), -1)
             cv2.circle(cam_view, (memoria_tags[0]['c_x'], memoria_tags[0]['c_y']), 5, (0, 165, 255), -1)
 
-            if mision_activa and 1 in memoria_tags and 2 in memoria_tags:
-                x1, y1 = memoria_tags[1]['m_x'], memoria_tags[1]['m_y']
-                x2, y2 = memoria_tags[2]['m_x'], memoria_tags[2]['m_y']
+            # MÁQUINA DE ESTADOS ESTRICTA (Secuencia 1 -> Virtual -> 2 -> Home)
+            if mision_activa and 1 in memoria_tags and 2 in memoria_tags and posicion_home:
+                t1x, t1y = memoria_tags[1]['m_x'], memoria_tags[1]['m_y']
+                t2x, t2y = memoria_tags[2]['m_x'], memoria_tags[2]['m_y']
 
-                # RUTEO EXACTO BASADO EN TU DIBUJO
                 if estado_mision == 1:
-                    objetivo_actual = (x1, y1)
-                    nombre_objetivo = "1. Hacia Tag 1"
+                    objetivo_actual = (t1x, t1y)
+                    nombre_objetivo = "1. Estacion 1"
                 elif estado_mision == 2:
-                    objetivo_actual = (x2, y1)
-                    nombre_objetivo = "2. Hacia Virtual 1"
+                    objetivo_actual = (t2x, t1y)
+                    nombre_objetivo = "2. Esquina Virtual"
                 elif estado_mision == 3:
-                    objetivo_actual = (x2, y2)
-                    nombre_objetivo = "3. Hacia Tag 2"
+                    objetivo_actual = (t2x, t2y)
+                    nombre_objetivo = "3. Estacion 2"
                 elif estado_mision == 4:
-                    objetivo_actual = (x1, y2) # Cierra el rectángulo perfecto
-                    nombre_objetivo = "4. Retorno a Inicio (Virtual 2)"
+                    objetivo_actual = posicion_home # Regresa exactamente a donde arrancó
+                    nombre_objetivo = "4. Posicion Inicial (HOME)"
 
                 if objetivo_actual:
                     tx, ty = objetivo_actual
@@ -161,7 +168,7 @@ def main():
                         estado_mision += 1
                         if estado_mision > 4:
                             mision_activa = False
-                            print("\n[★★★] RECTANGULO COMPLETADO [★★★]\n")
+                            print("\n[★★★] CUADRADO COMPLETADO CON EXITO [★★★]\n")
 
         cv2.rectangle(minimapa, (0, 0), (399, 399), (255, 255, 255), 2)
         cam_view[20:420, 1280-420:1280-20] = minimapa
@@ -175,15 +182,18 @@ def main():
         tecla = cv2.waitKey(1) & 0xFF
         if tecla == ord('q'): break
         elif tecla == ord('r'):
-            memoria_tags.clear(); estela_robot.clear(); mision_activa = False; estado_mision = 0
+            memoria_tags.clear(); estela_robot.clear(); mision_activa = False; estado_mision = 0; posicion_home = None
             print("\n[!] Memoria reiniciada.")
         elif tecla == ord('s') and not mision_activa:
             if 0 in memoria_tags and 1 in memoria_tags and 2 in memoria_tags:
+                # CAPTURA DE LA POSICION INICIAL AL PRESIONAR 'S'
+                posicion_home = (memoria_tags[0]['m_x'], memoria_tags[0]['m_y'])
                 mision_activa = True
                 estado_mision = 1
-                print("\n\n[>>>] INICIANDO RUTEO DE RECTANGULO [>>>]")
+                print("\n\n[>>>] INICIANDO RUTEO DE CUADRADO [>>>]")
+                print(f"[*] Posición Inicial guardada en: X:{posicion_home[0]:.2f}, Y:{posicion_home[1]:.2f}")
             else:
-                print("\n[X] Error: Faltan Tags para arrancar.")
+                print("\n[X] Error: La cámara necesita ver el Robot, Tag 1 y Tag 2 para arrancar.")
 
     cap.stop(); cv2.destroyAllWindows(); sock_udp.close()
 

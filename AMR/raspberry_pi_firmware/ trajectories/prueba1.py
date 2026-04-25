@@ -78,8 +78,6 @@ threading.Thread(target=escuchar_vision, daemon=True).start()
 # ==========================================
 print("Iniciando El Cerebro y Sensores...")
 i2c = busio.I2C(board.SCL, board.SDA)
-
-# Recuerda poner address=0x29 si tu módulo I2C lo requiere
 sensor_imu = adafruit_bno055.BNO055_I2C(i2c)
 
 try:
@@ -101,10 +99,8 @@ def obtener_yaw():
 def mandar_orden(placa, motor, direccion, rpm):
     rpm_seguro = max(0, min(abs(rpm), 100))
     comando = f"{motor},{direccion},{round(rpm_seguro, 1)}\n".encode('utf-8')
-    try:
-        placa.write(comando)
-    except:
-        pass 
+    try: placa.write(comando)
+    except: pass 
 
 def frenar_y_limpiar():
     mandar_orden(esp_1, "A", 0, 0); mandar_orden(esp_1, "B", 0, 0)
@@ -113,12 +109,12 @@ def frenar_y_limpiar():
     except: pass
 
 # ==========================================
-# 5. TRACCIÓN DIFERENCIAL (POLARIDAD ESTRICTA)
+# 5. TRACCIÓN (A:1, B:2 = ADELANTE PARA AMBOS)
 # ==========================================
 def aplicar_velocidades(v_izq, v_der):
     """
     Motor Izquierdo (ESP_1): Adelante = A:1, B:2
-    Motor Derecho   (ESP_2): Adelante = A:2, B:1
+    Motor Derecho   (ESP_2): Adelante = A:1, B:2
     """
     v_izq = max(-100, min(100, v_izq))
     v_der = max(-100, min(100, v_der))
@@ -126,18 +122,21 @@ def aplicar_velocidades(v_izq, v_der):
     dir_1A = 1 if v_izq >= 0 else 2
     dir_1B = 2 if v_izq >= 0 else 1
     
-    dir_2A = 2 if v_der >= 0 else 1
-    dir_2B = 1 if v_der >= 0 else 2
+    dir_2A = 1 if v_der >= 0 else 2
+    dir_2B = 2 if v_der >= 0 else 1
 
     mandar_orden(esp_1, "A", dir_1A, abs(v_izq))
     mandar_orden(esp_1, "B", dir_1B, abs(v_izq))
     mandar_orden(esp_2, "A", dir_2A, abs(v_der))
     mandar_orden(esp_2, "B", dir_2B, abs(v_der))
 
+
 # ==========================================
-# 6. CONTROLADOR DINÁMICO
+# 6. CONTROLADOR DINÁMICO (Con Giro Bloqueado)
 # ==========================================
 print("\n" + "="*40 + "\n  ESPERANDO ÓRDENES DE VISIÓN (WIFI)\n" + "="*40)
+
+modo_giro_bloqueado = False
 
 try:
     while True:
@@ -145,6 +144,7 @@ try:
         
         if tiempo_sin_datos > 1.0 or not datos_vision["activo"]:
             frenar_y_limpiar()
+            modo_giro_bloqueado = False
             sys.stdout.write("\r[ESPERA] Sin datos de visión o misión inactiva...       ")
             sys.stdout.flush()
             time.sleep(0.1)
@@ -154,34 +154,57 @@ try:
         dy = datos_vision["dy"]
         dist_meta = datos_vision["dist"]
 
-        # 1. Trigonometría (Ángulo hacia el objetivo)
+        # Trigonometría
         angulo_meta = math.degrees(math.atan2(dy, dx))
         
-        # 2. Error de rumbo
+        # Lectura de IMU y cálculo de error
         yaw_actual = obtener_yaw()
         error_yaw = angulo_meta - yaw_actual
         error_yaw = (error_yaw + 180) % 360 - 180
 
-        # 3. MÁQUINA DE ESTADOS FÍSICA PARA ESQUINAS DE 90°
-        if abs(error_yaw) > 15:
-            # Si el robot está desalineado (por ejemplo, llegó a una esquina)
-            # Frena el avance, y solo gira sobre su propio eje.
-            ajuste = error_yaw * KP_RUMBO
-            # Limitamos la velocidad de giro en sitio para no derrapar
-            ajuste = max(-25, min(25, ajuste)) 
-            aplicar_velocidades(-ajuste, ajuste)
-            estado = "GIRANDO  "
-        else:
-            # Si ya está alineado frente al objetivo, avanza recto y hace correcciones suaves
-            rpm_base = RPM_BASE if dist_meta > 0.15 else RPM_BASE * 0.6
-            ajuste = error_yaw * (KP_RUMBO * 0.5) # Corrección más suave al avanzar
-            aplicar_velocidades(rpm_base - ajuste, rpm_base + ajuste)
-            estado = "AVANZANDO"
+        # Si el error es mayor a 15 grados, forzamos el modo de giro estático
+        if abs(error_yaw) > 15 and not modo_giro_bloqueado:
+            frenar_y_limpiar()
+            time.sleep(0.2) # Pausa dramática para asentar inercia
+            modo_giro_bloqueado = True
 
-        sys.stdout.write(f"\r[{estado}] Dist: {dist_meta:.2f}m | Meta: {angulo_meta:+.0f}° | Yaw: {yaw_actual:+.0f}° | Err: {error_yaw:+.0f}°   ")
-        sys.stdout.flush()
+        if modo_giro_bloqueado:
+            # ----------------------------------------
+            # ESTADO: GIRANDO (Prioridad IMU)
+            # ----------------------------------------
+            # Calculamos la fuerza de giro (min 20 para no atascarse, max 35)
+            fuerza_giro = max(20, min(35, abs(error_yaw) * 0.8))
+            
+            if error_yaw < 0: 
+                # Girar a la Derecha (Izquierda adelante, Derecha atrás)
+                aplicar_velocidades(fuerza_giro, -fuerza_giro)
+            else: 
+                # Girar a la Izquierda (Izquierda atrás, Derecha adelante)
+                aplicar_velocidades(-fuerza_giro, fuerza_giro)
+                
+            sys.stdout.write(f"\r-> Girando... IMU: {yaw_actual:+.1f}° / Meta: {angulo_meta:+.1f}° (Faltan {abs(error_yaw):.1f}°)   ")
+            sys.stdout.flush()
+
+            # Tolerancia de 3.5 grados para dar el giro por terminado
+            if abs(error_yaw) <= 3.5:
+                frenar_y_limpiar()
+                modo_giro_bloqueado = False
+                time.sleep(0.2) # Pausa para asentar antes de avanzar
+                
+        else:
+            # ----------------------------------------
+            # ESTADO: AVANZANDO RECTO
+            # ----------------------------------------
+            rpm_base = RPM_BASE if dist_meta > 0.15 else RPM_BASE * 0.6
+            ajuste_recto = error_yaw * (KP_RUMBO * 0.5) 
+            
+            aplicar_velocidades(rpm_base - ajuste_recto, rpm_base + ajuste_recto)
+            
+            sys.stdout.write(f"\r-> Avanzando... Faltan: {dist_meta:.2f}m | IMU: {yaw_actual:+.1f}° | Err: {error_yaw:+.1f}°   ")
+            sys.stdout.flush()
         
-        time.sleep(0.05)
+        # Dormimos muy poco (0.02s) para leer el IMU tan rápido como tu código viejo (50Hz)
+        time.sleep(0.02)
 
 except KeyboardInterrupt:
     print("\n\n[!] Detenido por el usuario.")

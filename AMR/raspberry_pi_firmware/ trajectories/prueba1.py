@@ -79,7 +79,7 @@ threading.Thread(target=escuchar_vision, daemon=True).start()
 print("Iniciando El Cerebro y Sensores...")
 i2c = busio.I2C(board.SCL, board.SDA)
 
-# (Revisa tu código anterior si aquí le habías puesto address=0x29)
+# Recuerda poner address=0x29 si tu módulo I2C lo requiere
 sensor_imu = adafruit_bno055.BNO055_I2C(i2c)
 
 try:
@@ -104,7 +104,7 @@ def mandar_orden(placa, motor, direccion, rpm):
     try:
         placa.write(comando)
     except:
-        pass # Ignorar caídas de USB temporales por voltaje
+        pass 
 
 def frenar_y_limpiar():
     mandar_orden(esp_1, "A", 0, 0); mandar_orden(esp_1, "B", 0, 0)
@@ -113,21 +113,19 @@ def frenar_y_limpiar():
     except: pass
 
 # ==========================================
-# 5. FUNCIÓN DE TRACCIÓN (CABLEADO CORREGIDO)
+# 5. TRACCIÓN DIFERENCIAL (POLARIDAD ESTRICTA)
 # ==========================================
 def aplicar_velocidades(v_izq, v_der):
     """
     Motor Izquierdo (ESP_1): Adelante = A:1, B:2
-    Motor Derecho   (ESP_2): Adelante = A:2, B:1  <-- "derechas para atras" físico
+    Motor Derecho   (ESP_2): Adelante = A:2, B:1
     """
     v_izq = max(-100, min(100, v_izq))
     v_der = max(-100, min(100, v_der))
     
-    # Izquierdas (Si v_izq es positivo, va adelante)
     dir_1A = 1 if v_izq >= 0 else 2
     dir_1B = 2 if v_izq >= 0 else 1
     
-    # Derechas (Si v_der es positivo, aplicamos polaridad invertida para ir adelante)
     dir_2A = 2 if v_der >= 0 else 1
     dir_2B = 1 if v_der >= 0 else 2
 
@@ -164,20 +162,23 @@ try:
         error_yaw = angulo_meta - yaw_actual
         error_yaw = (error_yaw + 180) % 360 - 180
 
-        # 3. CONTROL PROPORCIONAL
-        # Reduce velocidad en la zona de precisión (últimos 15 cm)
-        rpm_base = RPM_BASE if dist_meta > 0.15 else RPM_BASE * 0.6
-        
-        ajuste = error_yaw * KP_RUMBO
-        
-        # Mezcla para tracción diferencial
-        rpm_izq = rpm_base - ajuste
-        rpm_der = rpm_base + ajuste
+        # 3. MÁQUINA DE ESTADOS FÍSICA PARA ESQUINAS DE 90°
+        if abs(error_yaw) > 15:
+            # Si el robot está desalineado (por ejemplo, llegó a una esquina)
+            # Frena el avance, y solo gira sobre su propio eje.
+            ajuste = error_yaw * KP_RUMBO
+            # Limitamos la velocidad de giro en sitio para no derrapar
+            ajuste = max(-25, min(25, ajuste)) 
+            aplicar_velocidades(-ajuste, ajuste)
+            estado = "GIRANDO  "
+        else:
+            # Si ya está alineado frente al objetivo, avanza recto y hace correcciones suaves
+            rpm_base = RPM_BASE if dist_meta > 0.15 else RPM_BASE * 0.6
+            ajuste = error_yaw * (KP_RUMBO * 0.5) # Corrección más suave al avanzar
+            aplicar_velocidades(rpm_base - ajuste, rpm_base + ajuste)
+            estado = "AVANZANDO"
 
-        aplicar_velocidades(rpm_izq, rpm_der)
-
-        # HUD en Terminal
-        sys.stdout.write(f"\r[AVANZANDO] Dist: {dist_meta:.2f}m | Meta: {angulo_meta:+.0f}° | Yaw: {yaw_actual:+.0f}° | Err: {error_yaw:+.0f}°   ")
+        sys.stdout.write(f"\r[{estado}] Dist: {dist_meta:.2f}m | Meta: {angulo_meta:+.0f}° | Yaw: {yaw_actual:+.0f}° | Err: {error_yaw:+.0f}°   ")
         sys.stdout.flush()
         
         time.sleep(0.05)

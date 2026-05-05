@@ -16,11 +16,11 @@ PULSOS_POR_REV = 20000.0
 CIRCUNFERENCIA_M = (DIAMETRO_LLANTA_MM * math.pi) / 1000.0
 PULSOS_POR_METRO = PULSOS_POR_REV / CIRCUNFERENCIA_M
 
-KP_RUMBO = 0.4
+KP_RUMBO = 0.8
 RPM_BASE = 20.0  
 
 # [!] OFFSET FÍSICO DEL ARUCO [!]
-OFFSET_CENTRO_M = 0.16 
+OFFSET_CENTRO_M = 0.16
 
 PUERTO_UDP = 5005
 datos_vision = {"dx": 0.0, "dy": 0.0, "dist": 0.0, "sentido": 1.0, "activo": False, "ultima_vez": time.time()}
@@ -134,7 +134,7 @@ def aplicar_velocidades_recto(v_izq, v_der):
     mandar_orden(esp_1, "A", dir_1A, abs(v_izq)); mandar_orden(esp_1, "B", dir_1B, abs(v_izq))
     mandar_orden(esp_2, "A", dir_2A, abs(v_der)); mandar_orden(esp_2, "B", dir_2B, abs(v_der))
 
-def avanzar_offset(metros_extra, rpm_base=25):
+def avanzar_offset(metros_extra, rpm_base=20):
     if metros_extra <= 0: return
     print(f"\n-> [COMPENSACIÓN] Avanzando {metros_extra}m extra para centrar el eje de giro...")
     
@@ -170,7 +170,7 @@ def avanzar_offset(metros_extra, rpm_base=25):
         time.sleep(0.02)
     print(" [OK]")
 
-def girar_grados(grados, rpm_giro=25):
+def girar_grados(grados, rpm_giro=20):
     print(f"\n-> Girando {grados:.1f} grados...")
     yaw_ini = obtener_yaw()
     
@@ -257,7 +257,7 @@ try:
                 time.sleep(0.3)
             
             grados_a_girar = 90.0 * datos_vision["sentido"]
-            girar_grados(grados_a_girar, rpm_giro=25)
+            girar_grados(grados_a_girar, rpm_giro=20)
             
             angulo_vision_anterior = angulo_vision_actual
             yaw_objetivo_local = obtener_yaw()

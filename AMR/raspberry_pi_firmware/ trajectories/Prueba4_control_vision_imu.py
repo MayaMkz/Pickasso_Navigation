@@ -17,7 +17,7 @@ CIRCUNFERENCIA_M = (DIAMETRO_LLANTA_MM * math.pi) / 1000.0
 PULSOS_POR_METRO = PULSOS_POR_REV / CIRCUNFERENCIA_M
 
 # Ganancias de Control PID Híbrido
-KP_RUMBO = 0.3       # Control del IMU (Reacción rápida)
+KP_RUMBO = 0.8       # Control del IMU (Reacción rápida)
 KP_VISION = 0.3      # Control de Cámara (Corrección suave)
 RPM_BASE = 20.0  
 
@@ -103,17 +103,20 @@ def obtener_yaw():
     except: pass
     return filtro_yaw.yaw_anterior if filtro_yaw.yaw_anterior else 0.0
 
-def leer_encoders(placa):
+def leer_encoders_seguro(placa):
+    # Lee los encoders asegurando que devuelva un número válido
     ultima_linea = ""
-    while placa.in_waiting > 0:
-        try: ultima_linea = placa.readline().decode('utf-8').rstrip()
-        except: pass
-    if "A:" in ultima_linea and "B:" in ultima_linea:
-        try:
-            partes = ultima_linea.split(',')
-            return int(partes[0].split(':')[1]), int(partes[1].split(':')[1])
-        except: pass
-    return None, None
+    for _ in range(5):
+        while placa.in_waiting > 0:
+            try: ultima_linea = placa.readline().decode('utf-8').rstrip()
+            except: pass
+        if "A:" in ultima_linea and "B:" in ultima_linea:
+            try:
+                partes = ultima_linea.split(',')
+                return int(partes[0].split(':')[1]), int(partes[1].split(':')[1])
+            except: pass
+        time.sleep(0.01)
+    return 0, 0 # Retorna 0 si fallan las lecturas
 
 def mandar_orden(placa, motor, direccion, rpm):
     rpm_seguro = max(0, min(abs(rpm), 100))
@@ -121,9 +124,6 @@ def mandar_orden(placa, motor, direccion, rpm):
     try: placa.write(comando)
     except: pass 
 
-# ==========================================
-# 5. LÓGICA ESTRICTA DE MOTORES
-# ==========================================
 def frenar_y_limpiar():
     mandar_orden(esp_1, "A", 0, 0); mandar_orden(esp_1, "B", 0, 0)
     mandar_orden(esp_2, "A", 0, 0); mandar_orden(esp_2, "B", 0, 0)
@@ -138,6 +138,61 @@ def aplicar_velocidades_recto(v_izq, v_der):
     mandar_orden(esp_1, "A", dir_1A, abs(v_izq)); mandar_orden(esp_1, "B", dir_1B, abs(v_izq))
     mandar_orden(esp_2, "A", dir_2A, abs(v_der)); mandar_orden(esp_2, "B", dir_2B, abs(v_der))
 
+# ==========================================
+# 5. DIAGNÓSTICO DE ARRANQUE (WATCHDOG)
+# ==========================================
+def diagnostico_inicial_motores():
+    print("\n" + "="*40)
+    print(" EJECUTANDO DIAGNÓSTICO DE HARDWARE...")
+    print("="*40)
+    
+    while True:
+        frenar_y_limpiar()
+        time.sleep(0.2)
+        
+        # Leer valores iniciales
+        e1A_ini, e1B_ini = leer_encoders_seguro(esp_1)
+        e2A_ini, e2B_ini = leer_encoders_seguro(esp_2)
+        
+        print("[!] Aplicando pulso de prueba (15 RPM)...")
+        aplicar_velocidades_recto(15, 15)
+        time.sleep(0.5) # Esperar medio segundo a que las llantas giren
+        frenar_y_limpiar()
+        time.sleep(0.2)
+        
+        # Leer valores finales
+        e1A_fin, e1B_fin = leer_encoders_seguro(esp_1)
+        e2A_fin, e2B_fin = leer_encoders_seguro(esp_2)
+        
+        # Calcular cuántos pulsos dio cada llanta
+        dif_1A = abs(e1A_fin - e1A_ini)
+        dif_1B = abs(e1B_fin - e1B_ini)
+        dif_2A = abs(e2A_fin - e2A_ini)
+        dif_2B = abs(e2B_fin - e2B_ini)
+        
+        # Tolerancia mínima (Si dio menos de 50 pulsos, algo anda mal)
+        umbral_fallo = 50 
+        
+        if dif_1A < umbral_fallo or dif_1B < umbral_fallo or dif_2A < umbral_fallo or dif_2B < umbral_fallo:
+            print("\n[ERROR CRÍTICO] Se detectó falla en motores o encoders:")
+            print(f" -> ESP_1 (Izq): Llanta A = {dif_1A} pulsos | Llanta B = {dif_1B} pulsos")
+            print(f" -> ESP_2 (Der): Llanta A = {dif_2A} pulsos | Llanta B = {dif_2B} pulsos")
+            print("\n* Causas posibles: Batería baja, cable de motor suelto, o encoder desconectado.")
+            
+            # Bloquea el programa y pide teclado
+            input("\n>>> Presiona ENTER cuando hayas revisado las conexiones para reintentar la prueba...")
+            print("\nReintentando diagnóstico...")
+        else:
+            print("[OK] Los 4 motores y encoders responden correctamente.")
+            print(f" -> Pulsos de prueba: ESP1({dif_1A}, {dif_1B}) | ESP2({dif_2A}, {dif_2B})")
+            break
+
+# Ejecutar el diagnóstico antes de entrar al loop principal
+diagnostico_inicial_motores()
+
+# ==========================================
+# 6. RUTINAS DE AVANCE Y GIRO
+# ==========================================
 def avanzar_offset(metros_extra, rpm_base=20):
     if metros_extra <= 0: return
     print(f"\n-> [COMPENSACIÓN] Avanzando {metros_extra}m extra para centrar el eje de giro...")
@@ -145,21 +200,16 @@ def avanzar_offset(metros_extra, rpm_base=20):
     esp_1.reset_input_buffer()
     pulsos_objetivo = int(metros_extra * PULSOS_POR_METRO)
     
-    enc_a_ini, _ = leer_encoders(esp_1)
-    while enc_a_ini is None: 
-        enc_a_ini, _ = leer_encoders(esp_1)
-        time.sleep(0.01)
-        
+    enc_a_ini, _ = leer_encoders_seguro(esp_1)
     yaw_objetivo = obtener_yaw()
     recorrido = 0
     
     while True:
-        enc_a_act, _ = leer_encoders(esp_1)
-        if enc_a_act is not None:
-            recorrido = abs(enc_a_act - enc_a_ini)
-            if recorrido >= pulsos_objetivo:
-                frenar_y_limpiar()
-                break
+        enc_a_act, _ = leer_encoders_seguro(esp_1)
+        recorrido = abs(enc_a_act - enc_a_ini)
+        if recorrido >= pulsos_objetivo:
+            frenar_y_limpiar()
+            break
         
         yaw_act = obtener_yaw()
         error_yaw = yaw_act - yaw_objetivo
@@ -202,7 +252,7 @@ def girar_grados(grados, rpm_giro=20):
         time.sleep(0.01)
 
 # ==========================================
-# 6. MÁQUINA DE ESTADOS VISIÓN + IMU
+# 7. MÁQUINA DE ESTADOS VISIÓN + IMU
 # ==========================================
 print("\n" + "="*40 + "\n  ESPERANDO ÓRDENES DE VISIÓN (WIFI)\n" + "="*40)
 
@@ -279,7 +329,6 @@ try:
         error_lateral_vision = (error_lateral_vision + 180) % 360 - 180
 
         # 2. Control Externo Lento (Corrección de la Meta del IMU)
-        # Multiplicamos por la ganancia de visión para no dar volantazos bruscos
         correccion_vision = error_lateral_vision * KP_VISION
         
         # Limitamos la corrección a +/- 15 grados por seguridad física
@@ -303,10 +352,9 @@ try:
         aplicar_velocidades_recto(rpm_izq, rpm_der)
 
         # Diagnóstico en Pantalla
-        e1, _ = leer_encoders(esp_1); e2, _ = leer_encoders(esp_2)
-        e1_val = e1 if e1 else 0; e2_val = e2 if e2 else 0
+        e1, _ = leer_encoders_seguro(esp_1); e2, _ = leer_encoders_seguro(esp_2)
 
-        sys.stdout.write(f"\r[AVANZANDO] Err Vision: {error_lateral_vision:+.1f}° | Corr IMU: {correccion_vision:+.1f}° | IMU Act: {yaw_actual:+.1f}°   ")
+        sys.stdout.write(f"\r[AVANZANDO] Err Vis: {error_lateral_vision:+.1f}° | Corr IMU: {correccion_vision:+.1f}° | IMU Act: {yaw_actual:+.1f}°   ")
         sys.stdout.flush()
         
         time.sleep(0.02)

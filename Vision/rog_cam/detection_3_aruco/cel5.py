@@ -39,7 +39,7 @@ def main():
     PUERTO_UDP = 5005
 
     TOLERANCIA_LLEGADA_M = 0.05
-    OFFSET_MESA_M = 0.35 # 10cm + 25cm (mitad del chasis)
+    OFFSET_MESA_M = 0.35 # [CORRECTO] 10cm + 25cm (mitad del chasis)
 
     print(f"[*] Conectando a Cámara en {DROIDCAM_URL}...")
     try: cap = CamaraIP_UltraRapida(DROIDCAM_URL).start()
@@ -115,7 +115,7 @@ def main():
                     cv2.putText(cam_view, f"Tag {m_id}" if m_id!=0 else "Robot", (cx-40, cy-40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
         # =========================================================
-        # GEOMETRÍA INDEPENDIENTE: Solo depende de Tag 1 y Tag 2
+        # GEOMETRÍA INDEPENDIENTE Y OFFSET DE MESA
         # =========================================================
         if 1 in memoria_tags and 2 in memoria_tags:
             t1x, t1y, t1z = memoria_tags[1]['m_x'], memoria_tags[1]['m_y'], memoria_tags[1]['m_z']
@@ -141,7 +141,7 @@ def main():
 
             ruta_pts_global = [expandir_punto(*p) for p in mesa_pts]
 
-            # Dibujos
+            # --- DIBUJOS ---
             pts_radar_mesa = np.array([metros_a_pixeles_radar(p[0], p[1]) for p in mesa_pts], np.int32).reshape((-1, 1, 2))
             cv2.polylines(minimapa, [pts_radar_mesa], isClosed=True, color=(255, 150, 50), thickness=2)
             
@@ -157,6 +157,17 @@ def main():
                 pts_2d_ruta, _ = cv2.projectPoints(pts_3d_ruta, np.zeros((3,1)), np.zeros((3,1)), camera_matrix, zero_dist)
                 cv2.polylines(cam_view, [np.int32(pts_2d_ruta).reshape((-1,1,2))], isClosed=True, color=(0, 255, 0), thickness=3)
 
+            # --- RESTAURACIÓN DE MEDIDAS REALES ---
+            ancho_mesa = abs(t1x - t2x)
+            largo_mesa = abs(t1y - t2y)
+            ancho_ruta = ancho_mesa + (2 * OFFSET_MESA_M)
+            largo_ruta = largo_mesa + (2 * OFFSET_MESA_M)
+            
+            txt_mesa = f"Mesa: {ancho_mesa:.2f}m x {largo_mesa:.2f}m"
+            txt_ruta = f"Ruta Offset: {ancho_ruta:.2f}m x {largo_ruta:.2f}m"
+            cv2.putText(cam_view, txt_mesa, (30, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 150, 50), 2)
+            cv2.putText(cam_view, txt_ruta, (30, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
         if 0 in memoria_tags:
             rx, ry = memoria_tags[0]['m_x'], memoria_tags[0]['m_y']
             p_robot_radar = metros_a_pixeles_radar(rx, ry)
@@ -167,9 +178,9 @@ def main():
             cv2.circle(minimapa, p_robot_radar, 8, (0, 165, 255), -1)
 
             if mision_activa and len(ruta_pts_global) == 4:
-                if estado_mision == 1: objetivo_actual = ruta_pts_global[0]; nombre_objetivo = "1. Estacion 1"
+                if estado_mision == 1: objetivo_actual = ruta_pts_global[0]; nombre_objetivo = "1. Est.1 (Margen Seguro)"
                 elif estado_mision == 2: objetivo_actual = ruta_pts_global[1]; nombre_objetivo = "2. Esq. Virtual 1"
-                elif estado_mision == 3: objetivo_actual = ruta_pts_global[2]; nombre_objetivo = "3. Estacion 2"
+                elif estado_mision == 3: objetivo_actual = ruta_pts_global[2]; nombre_objetivo = "3. Est.2 (Margen Seguro)"
                 elif estado_mision == 4: objetivo_actual = ruta_pts_global[3]; nombre_objetivo = "4. Esq. Virtual 2"
 
                 if objetivo_actual:
@@ -205,7 +216,6 @@ def main():
             memoria_tags.clear(); estela_robot.clear(); mision_activa = False; estado_mision = 0
         elif tecla == ord('s') and not mision_activa:
             if len(ruta_pts_global) == 4 and 0 in memoria_tags:
-                # Determinamos giro
                 hx, hy = memoria_tags[0]['m_x'], memoria_tags[0]['m_y']
                 t1x, t1y = ruta_pts_global[0][0], ruta_pts_global[0][1]
                 t2x, t2y = ruta_pts_global[2][0], ruta_pts_global[2][1]

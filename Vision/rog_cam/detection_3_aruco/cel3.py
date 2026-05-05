@@ -34,11 +34,11 @@ class CamaraIP_UltraRapida:
 # PROGRAMA PRINCIPAL
 # ==========================================
 def main():
-    DROIDCAM_URL = "http://10.48.97.233:4747/video"  
+    DROIDCAM_URL = "http://192.168.137.24:4747/video"
     IP_RASPBERRY = "192.168.137.240"                 
     PUERTO_UDP = 5005
 
-    TOLERANCIA_LLEGADA_M = 0.05 
+    TOLERANCIA_LLEGADA_M = 0.05
 
     print(f"[*] Conectando a Cámara en {DROIDCAM_URL}...")
     try: cap = CamaraIP_UltraRapida(DROIDCAM_URL).start()
@@ -60,11 +60,39 @@ def main():
     objetivo_actual = None
     nombre_objetivo = ""
     
-    # [NUEVO] Variable para guardar el sentido del circuito (1 = Izquierda, -1 = Derecha)
+    # Variable para guardar el sentido del circuito (1 = Izquierda, -1 = Derecha)
     sentido_giro_global = 1 
 
-    # IMPORTANTE: Reemplaza esto con los números de tu calibración real
-    camera_matrix = None; dist_coeffs = None; map1 = None; map2 = None
+    # ==========================================
+    # CARGA DE CALIBRACIÓN CHARUCO
+    # ==========================================
+    camera_matrix = None
+    dist_coeffs = None
+    map1 = None
+    map2 = None
+
+    print("[*] Buscando archivo de calibración...")
+    fs = cv2.FileStorage("parametros_droidcam.yaml", cv2.FILE_STORAGE_READ)
+
+    if fs.isOpened():
+        camera_matrix = fs.getNode("camera_matrix").mat()
+        dist_coeffs = fs.getNode("dist_coeffs").mat()
+        fs.release()
+        print("[+] ¡Parámetros de lente cargados exitosamente!")
+        
+        # Pre-calcular mapas de corrección de distorsión (Mejora el rendimiento)
+        w, h = 1280, 720 # Resolución fija de CamaraIP_UltraRapida
+        map1, map2 = cv2.initUndistortRectifyMap(
+            camera_matrix, dist_coeffs, None, camera_matrix, (w, h), cv2.CV_32FC1)
+    else:
+        print("[-] ALERTA: No se encontró 'parametros_droidcam.yaml'. Se usarán parámetros genéricos.")
+        # Parámetros genéricos por si pierdes el archivo
+        w, h = 1280, 720
+        focal_length = w * 0.9 
+        camera_matrix = np.array([[focal_length, 0, w / 2], [0, focal_length, h / 2], [0, 0, 1]], dtype=np.float32)
+        dist_coeffs = np.zeros((4, 1))
+        map1, map2 = cv2.initUndistortRectifyMap(camera_matrix, dist_coeffs, None, camera_matrix, (w,h), cv2.CV_32FC1)
+    # ==========================================
     
     aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
     aruco_params = cv2.aruco.DetectorParameters()
@@ -81,14 +109,11 @@ def main():
         cv_image_raw = cap.read()
         if cv_image_raw is None: continue
 
-        if camera_matrix is None:
-            h, w = cv_image_raw.shape[:2]
-            focal_length = w * 0.9 
-            camera_matrix = np.array([[focal_length, 0, w / 2], [0, focal_length, h / 2], [0, 0, 1]], dtype=np.float32)
-            dist_coeffs = np.zeros((4, 1))
-            map1, map2 = cv2.initUndistortRectifyMap(camera_matrix, dist_coeffs, None, camera_matrix, (w,h), cv2.CV_32FC1)
-
+        # --- APLICAR CORRECCIÓN DE LENTE ---
+        # Se utilizan los mapas precalculados basados en el YAML
         cam_view = cv2.remap(cv_image_raw, map1, map2, interpolation=cv2.INTER_LINEAR)
+        # -----------------------------------
+
         minimapa = np.zeros((400, 400, 3), dtype=np.uint8)
         
         for i in range(0, 400, 50):
@@ -144,7 +169,6 @@ def main():
                     dy = ty - ry
                     dist = math.hypot(dx, dy)
                     
-                    # [NUEVO] Enviamos 4 parámetros: dx, dy, dist, y el sentido del circuito
                     mensaje_red = f"{dx},{dy},{dist},{sentido_giro_global}"
                     sock_udp.sendto(mensaje_red.encode('utf-8'), (IP_RASPBERRY, PUERTO_UDP))
 
@@ -176,16 +200,13 @@ def main():
                 t1x, t1y = memoria_tags[1]['m_x'], memoria_tags[1]['m_y']
                 t2x, t2y = memoria_tags[2]['m_x'], memoria_tags[2]['m_y']
                 
-                # --- [NUEVA LÓGICA DE DETECCIÓN DE LADO] ---
-                # Usamos el producto cruz 2D de los vectores (Robot->Tag1) y (Robot->Tag2)
                 cross_z = (t1x - hx) * (t2y - hy) - (t1y - hy) * (t2x - hx)
                 
-                # En OpenCV, Y es invertida. Si cross_z < 0, Tag2 está a la IZQUIERDA.
                 if cross_z < 0:
-                    sentido_giro_global = 1  # 1 = Izquierda (+90 grados)
+                    sentido_giro_global = 1 
                     print("\n[!] Detección: El circuito se formará hacia la IZQUIERDA.")
                 else:
-                    sentido_giro_global = -1 # -1 = Derecha (-90 grados)
+                    sentido_giro_global = -1 
                     print("\n[!] Detección: El circuito se formará hacia la DERECHA.")
                 
                 posicion_home = (hx, hy)

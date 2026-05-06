@@ -38,8 +38,8 @@ def main():
     IP_RASPBERRY = "192.168.137.240"                 
     PUERTO_UDP = 5005
 
-    TOLERANCIA_LLEGADA_M = 0.15 # Ampliado para evitar overshoot
-    OFFSET_MESA_M = 0.45 
+    TOLERANCIA_LLEGADA_M = 0.08  # Tolerancia estricta de 8cm 
+    OFFSET_MESA_M = 0.35         # 10cm de margen + 25cm (mitad de tu chasis)
 
     print(f"[*] Conectando a Cámara en {DROIDCAM_URL}...")
     try: cap = CamaraIP_UltraRapida(DROIDCAM_URL).start()
@@ -109,7 +109,7 @@ def main():
                 success, rvec, tvec = cv2.solvePnP(obj_points, corners[i][0], camera_matrix, zero_dist, flags=cv2.SOLVEPNP_IPPE_SQUARE)
                 if success:
                     cx, cy = int(np.mean(corners[i][0][:, 0])), int(np.mean(corners[i][0][:, 1]))
-                    # [NUEVO] Guardamos rvec y tvec completos para calcular el frente del robot
+                    # [VITAL] Guardamos rvec y tvec completos para calcular la pose 6D del robot
                     memoria_tags[m_id] = {'m_x': tvec[0][0], 'm_y': tvec[1][0], 'm_z': tvec[2][0], 'c_x': cx, 'c_y': cy, 'rvec': rvec, 'tvec': tvec}
                     cv2.aruco.drawDetectedMarkers(cam_view, corners)
                     color = (0, 165, 255) if m_id == 0 else (0, 255, 0)
@@ -162,13 +162,13 @@ def main():
             cv2.putText(cam_view, txt_mesa, (30, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 150, 50), 2)
 
         # =========================================================
-        # [NUEVO] POSE 6D: FLECHA Y ORIENTACIÓN DEL ROBOT
+        # POSE 6D: FLECHA Y ORIENTACIÓN EXACTA DEL ROBOT
         # =========================================================
         if 0 in memoria_tags:
             rx, ry = memoria_tags[0]['m_x'], memoria_tags[0]['m_y']
             rvec, tvec = memoria_tags[0]['rvec'], memoria_tags[0]['tvec']
             
-            # 1. Convertimos el vector de rotación en una Matriz de Rotación 3x3
+            # 1. Matriz de Rotación
             R, _ = cv2.Rodrigues(rvec)
             
             # 2. Vector apuntando hacia el "Frente" (La parte de arriba del tag es -Y)
@@ -178,15 +178,15 @@ def main():
             fx = rx + vector_frente_cam[0][0]
             fy = ry + vector_frente_cam[1][0]
             
-            # 3. Calculamos el ángulo visual del robot (Yaw Absoluto)
+            # 3. Orientación angular visual del robot
             robot_yaw_visual = math.atan2(vector_frente_cam[1][0], vector_frente_cam[0][0])
             
-            # 4. Dibujar Flecha en el Minimapa
+            # 4. Dibujar Flecha en Minimapa
             p_robot_radar = metros_a_pixeles_radar(rx, ry)
             p_frente_radar = metros_a_pixeles_radar(fx, fy)
             cv2.arrowedLine(minimapa, p_robot_radar, p_frente_radar, (0, 0, 255), 2, tipLength=0.3)
             
-            # 5. Dibujar Flecha en la Cámara 3D
+            # 5. Dibujar Flecha en 3D en la Cámara principal
             pt3d = np.array([[0.0, -0.15, 0.0]], dtype=np.float32)
             pt2d, _ = cv2.projectPoints(pt3d, rvec, tvec, camera_matrix, zero_dist)
             px, py = int(pt2d[0][0][0]), int(pt2d[0][0][1])
@@ -213,10 +213,9 @@ def main():
                     # [LA MAGIA] Calculamos el error angular exacto directo en la cámara
                     target_yaw = math.atan2(dy, dx)
                     error_angular_grados = math.degrees(target_yaw - robot_yaw_visual)
-                    # Normalizar entre -180 y 180
                     error_angular_grados = (error_angular_grados + 180) % 360 - 180
                     
-                    # [NUEVO PAYLOAD] Agregamos el error_angular como el 5to dato
+                    # [PAYLOAD UDP] Enviamos 5 datos a la Raspberry (incluyendo el error_angular_grados)
                     mensaje_red = f"{dx},{dy},{dist},{sentido_giro_global},{error_angular_grados:.2f}"
                     sock_udp.sendto(mensaje_red.encode('utf-8'), (IP_RASPBERRY, PUERTO_UDP))
 

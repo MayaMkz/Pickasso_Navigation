@@ -115,7 +115,7 @@ def main():
                     cv2.putText(cam_view, f"Tag {m_id}" if m_id!=0 else "Robot", (cx-40, cy-40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
         # =========================================================
-        # GEOMETRÍA DEL RECTÁNGULO
+        # GEOMETRÍA DEL RECTÁNGULO Y DIBUJO EN 3D
         # =========================================================
         if 1 in memoria_tags and 2 in memoria_tags:
             t1x, t1y, t1z = memoria_tags[1]['m_x'], memoria_tags[1]['m_y'], memoria_tags[1]['m_z']
@@ -133,11 +133,26 @@ def main():
 
             ruta_pts_global = [expandir_punto(*p) for p in mesa_pts]
 
+            # 1. Dibujar en Minimapa (Radar)
             pts_radar_mesa = np.array([metros_a_pixeles_radar(p[0], p[1]) for p in mesa_pts], np.int32).reshape((-1, 1, 2))
             cv2.polylines(minimapa, [pts_radar_mesa], isClosed=True, color=(255, 150, 50), thickness=2)
             
             pts_radar_ruta = np.array([metros_a_pixeles_radar(p[0], p[1]) for p in ruta_pts_global], np.int32).reshape((-1, 1, 2))
             cv2.polylines(minimapa, [pts_radar_ruta], isClosed=True, color=(0, 255, 0), thickness=2)
+
+            # 2. Dibujar Proyección 3D en la Cámara (cam_view)
+            if camera_matrix is not None:
+                # Proyección Mesa (Naranja)
+                pts_3d_mesa = np.array(mesa_pts, dtype=np.float32)
+                pts_2d_mesa, _ = cv2.projectPoints(pts_3d_mesa, np.zeros((3,1)), np.zeros((3,1)), camera_matrix, zero_dist)
+                cv2.polylines(cam_view, [np.int32(pts_2d_mesa).reshape((-1,1,2))], isClosed=True, color=(255, 150, 50), thickness=2)
+                
+                # Proyección Ruta Offset (Verde)
+                pts_3d_ruta = np.array(ruta_pts_global, dtype=np.float32)
+                pts_2d_ruta, _ = cv2.projectPoints(pts_3d_ruta, np.zeros((3,1)), np.zeros((3,1)), camera_matrix, zero_dist)
+                cv2.polylines(cam_view, [np.int32(pts_2d_ruta).reshape((-1,1,2))], isClosed=True, color=(0, 255, 0), thickness=3)
+
+            cv2.putText(cam_view, f"Mesa: {abs(t1x - t2x):.2f}m x {abs(t1y - t2y):.2f}m", (30, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 150, 50), 2)
 
         # =========================================================
         # NAVEGACIÓN PURE PURSUIT Y CINEMÁTICA
@@ -171,6 +186,12 @@ def main():
             # Dibujar flecha desde el centro real y un punto azul marcando el centro
             cv2.arrowedLine(minimapa, p_centro_radar, p_frente_radar, (0, 0, 255), 2, tipLength=0.3)
             cv2.circle(minimapa, p_centro_radar, 4, (255, 0, 0), -1)
+            
+            # Flecha 3D en la vista de cámara (cam_view)
+            pt3d = np.array([[0.0, -0.15, 0.0]], dtype=np.float32)
+            pt2d, _ = cv2.projectPoints(pt3d, rvec, tvec, camera_matrix, zero_dist)
+            cv2.arrowedLine(cam_view, (memoria_tags[0]['c_x'], memoria_tags[0]['c_y']), 
+                            (int(pt2d[0][0][0]), int(pt2d[0][0][1])), (0, 0, 255), 4, tipLength=0.3)
 
             if not estela_robot or estela_robot[-1] != p_centro_radar: estela_robot.append(p_centro_radar)
             for i in range(1, len(estela_robot)):

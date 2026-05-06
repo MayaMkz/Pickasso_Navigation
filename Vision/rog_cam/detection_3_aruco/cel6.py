@@ -38,8 +38,27 @@ def main():
     IP_RASPBERRY = "192.168.137.240"                 
     PUERTO_UDP = 5005
 
+    # =================================================================
+    # PARÁMETROS CRÍTICOS DE NAVEGACIÓN Y FÍSICA
+    # =================================================================
+    
+    # 1. OFFSET DE LA MESA (MANTENER 10cm PARA LA LLANTA INTERNA)
+    # Fórmula: 0.10m + (L_WHEELBASE_M / 2)
+    # Si tu carro mide 30cm entre llantas, la mitad son 15cm. 10cm + 15cm = 25cm.
+    OFFSET_MESA_M = 0.25  
+
+    # 2. PUNTO OBJETIVO (LA ZANAHORIA)
+    # Distancia a la que el robot persigue el punto sobre la línea.
+    LOOKAHEAD_FIJO = 0.20  # 20 cm. Más bajo = más agresivo. Más alto = más suave.
+    
+    # 3. DISTANCIA PARA CONSIDERAR QUE LLEGÓ A LA ESQUINA
     TOLERANCIA_LLEGADA_M = 0.08  
-    OFFSET_MESA_M = 0.35         
+
+    # 4. COMPENSACIÓN DEL ARUCO DESCENTRADO (Medido desde el centro de las 4 llantas)
+    OFFSET_X_TAG = 0.00    # Metros izquierda/derecha (0 si está al centro a lo ancho)
+    OFFSET_Y_TAG = 0.10    # Metros hacia el frente (ej. 10cm = 0.10)
+
+    # =================================================================
 
     print(f"[*] Conectando a Cámara en {DROIDCAM_URL}...")
     try: cap = CamaraIP_UltraRapida(DROIDCAM_URL).start()
@@ -115,7 +134,7 @@ def main():
                     cv2.putText(cam_view, f"Tag {m_id}" if m_id!=0 else "Robot", (cx-40, cy-40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
         # =========================================================
-        # GEOMETRÍA DEL RECTÁNGULO Y DIBUJO EN 3D
+        # GEOMETRÍA DEL RECTÁNGULO
         # =========================================================
         if 1 in memoria_tags and 2 in memoria_tags:
             t1x, t1y, t1z = memoria_tags[1]['m_x'], memoria_tags[1]['m_y'], memoria_tags[1]['m_z']
@@ -133,128 +152,129 @@ def main():
 
             ruta_pts_global = [expandir_punto(*p) for p in mesa_pts]
 
-            # 1. Dibujar en Minimapa (Radar)
             pts_radar_mesa = np.array([metros_a_pixeles_radar(p[0], p[1]) for p in mesa_pts], np.int32).reshape((-1, 1, 2))
             cv2.polylines(minimapa, [pts_radar_mesa], isClosed=True, color=(255, 150, 50), thickness=2)
             
             pts_radar_ruta = np.array([metros_a_pixeles_radar(p[0], p[1]) for p in ruta_pts_global], np.int32).reshape((-1, 1, 2))
             cv2.polylines(minimapa, [pts_radar_ruta], isClosed=True, color=(0, 255, 0), thickness=2)
 
-            # 2. Dibujar Proyección 3D en la Cámara (cam_view)
-            if camera_matrix is not None:
-                # Proyección Mesa (Naranja)
-                pts_3d_mesa = np.array(mesa_pts, dtype=np.float32)
-                pts_2d_mesa, _ = cv2.projectPoints(pts_3d_mesa, np.zeros((3,1)), np.zeros((3,1)), camera_matrix, zero_dist)
-                cv2.polylines(cam_view, [np.int32(pts_2d_mesa).reshape((-1,1,2))], isClosed=True, color=(255, 150, 50), thickness=2)
-                
-                # Proyección Ruta Offset (Verde)
-                pts_3d_ruta = np.array(ruta_pts_global, dtype=np.float32)
-                pts_2d_ruta, _ = cv2.projectPoints(pts_3d_ruta, np.zeros((3,1)), np.zeros((3,1)), camera_matrix, zero_dist)
-                cv2.polylines(cam_view, [np.int32(pts_2d_ruta).reshape((-1,1,2))], isClosed=True, color=(0, 255, 0), thickness=3)
-
-            cv2.putText(cam_view, f"Mesa: {abs(t1x - t2x):.2f}m x {abs(t1y - t2y):.2f}m", (30, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 150, 50), 2)
-
         # =========================================================
-        # NAVEGACIÓN PURE PURSUIT Y CINEMÁTICA
+        # NAVEGACIÓN PURE PURSUIT Y ZANAHORIA MÓVIL
         # =========================================================
         if 0 in memoria_tags:
             rx, ry = memoria_tags[0]['m_x'], memoria_tags[0]['m_y']
             rvec, tvec = memoria_tags[0]['rvec'], memoria_tags[0]['tvec']
             
-            # Matriz de Rotación y Orientación
+            # Matriz de Rotación
             R, _ = cv2.Rodrigues(rvec)
             
-            # 1. Frente visual para la flecha indicadora
+            # Orientación visual (Frente del tag)
             vector_frente_cam = R @ np.array([[0.0], [-0.15], [0.0]])
             fx, fy = rx + vector_frente_cam[0][0], ry + vector_frente_cam[1][0]
             robot_yaw_visual = math.atan2(vector_frente_cam[1][0], vector_frente_cam[0][0])
             
             # -----------------------------------------------------------------
-            # 2. COMPENSACIÓN DEL CENTRO DEL CARRO (AJUSTA ESTO)
+            # CÁLCULO DEL CENTRO REAL DEL CARRO (Eje de tracción)
             # -----------------------------------------------------------------
-            OFFSET_X_TAG = 0.0    # 0 si el tag está centrado a lo ancho
-            OFFSET_Y_TAG = 0.08   # <--- PON AQUÍ TU MEDIDA EN METROS (ej. 8cm hacia el frente)
-            
             vector_offset = R @ np.array([[OFFSET_X_TAG], [OFFSET_Y_TAG], [0.0]])
             centro_carro_x = rx + vector_offset[0][0]
             centro_carro_y = ry + vector_offset[1][0]
 
-            # 3. Gráficos en Radar
-            p_centro_radar = metros_a_pixeles_radar(centro_carro_x, centro_carro_y) # Centro Real
+            # Gráficos base
+            p_centro_radar = metros_a_pixeles_radar(centro_carro_x, centro_carro_y)
             p_frente_radar = metros_a_pixeles_radar(fx, fy)
-            
-            # Dibujar flecha desde el centro real y un punto azul marcando el centro
             cv2.arrowedLine(minimapa, p_centro_radar, p_frente_radar, (0, 0, 255), 2, tipLength=0.3)
             cv2.circle(minimapa, p_centro_radar, 4, (255, 0, 0), -1)
-            
-            # Flecha 3D en la vista de cámara (cam_view)
-            pt3d = np.array([[0.0, -0.15, 0.0]], dtype=np.float32)
-            pt2d, _ = cv2.projectPoints(pt3d, rvec, tvec, camera_matrix, zero_dist)
-            cv2.arrowedLine(cam_view, (memoria_tags[0]['c_x'], memoria_tags[0]['c_y']), 
-                            (int(pt2d[0][0][0]), int(pt2d[0][0][1])), (0, 0, 255), 4, tipLength=0.3)
 
             if not estela_robot or estela_robot[-1] != p_centro_radar: estela_robot.append(p_centro_radar)
             for i in range(1, len(estela_robot)):
                 cv2.line(minimapa, estela_robot[i-1], estela_robot[i], (0, 100, 255), int(np.interp(i, [0, len(estela_robot)], [1, 3])))
 
-            # --- LA MATEMÁTICA DE PURE PURSUIT ---
+            # -----------------------------------------------------------------
+            # ZANAHORIA MÓVIL SOBRE LA TRAYECTORIA
+            # -----------------------------------------------------------------
             if mision_activa and len(ruta_pts_global) == 4 and posicion_home is not None:
+                origen_linea = None
                 if estado_mision == 1: 
+                    origen_linea = posicion_home
                     objetivo_actual = ruta_pts_global[0]; nombre_objetivo = "1. Est.1"
                 elif estado_mision == 2: 
+                    origen_linea = ruta_pts_global[0]
                     objetivo_actual = ruta_pts_global[1]; nombre_objetivo = "2. Esq. 1"
                 elif estado_mision == 3: 
+                    origen_linea = ruta_pts_global[1]
                     objetivo_actual = ruta_pts_global[2]; nombre_objetivo = "3. Est.2"
                 elif estado_mision == 4: 
+                    origen_linea = ruta_pts_global[2]
                     objetivo_actual = ruta_pts_global[3]; nombre_objetivo = "4. Esq. 2"
 
-                if objetivo_actual:
-                    tx, ty, _ = objetivo_actual
+                if objetivo_actual and origen_linea:
+                    tx_fin, ty_fin, _ = objetivo_actual
+                    ox, oy, _ = origen_linea
                     
-                    # 4. Cálculo de distancias usando el CENTRO REAL
-                    dx_meta, dy_meta = tx - centro_carro_x, ty - centro_carro_y
-                    dist_meta = math.hypot(dx_meta, dy_meta)
+                    # Distancia real a la meta final del tramo
+                    dist_meta_real = math.hypot(tx_fin - centro_carro_x, ty_fin - centro_carro_y)
                     
-                    # Ángulo hacia la meta (Alpha) relativo al frente del robot
-                    angulo_hacia_meta = math.atan2(dy_meta, dx_meta)
-                    alpha = angulo_hacia_meta - robot_yaw_visual
-                    alpha = (alpha + math.pi) % (2 * math.pi) - math.pi
-                    
-                    # 5. Cinemática de Pure Pursuit
-                    v_lineal = 0.15  # Velocidad base en m/s
-                    
-                    if dist_meta <= TOLERANCIA_LLEGADA_M:
-                        v_lineal = 0.0
-                        omega_ref = 0.0
+                    if dist_meta_real <= TOLERANCIA_LLEGADA_M:
+                        v_lineal = 0.0; omega_ref = 0.0
                         estado_mision += 1
                         if estado_mision > 4: mision_activa = False
                     else:
-                        ld_seguro = max(dist_meta, 0.1) 
+                        # 1. Trazar la línea ideal
+                        L_linea = math.hypot(tx_fin - ox, ty_fin - oy)
+                        if L_linea == 0: L_linea = 0.001
+                        
+                        ux, uy = (tx_fin - ox) / L_linea, (ty_fin - oy) / L_linea
+                        
+                        # 2. Proyectar posición del carro en la línea ideal
+                        vx, vy = centro_carro_x - ox, centro_carro_y - oy
+                        proyeccion = (vx * ux) + (vy * uy)
+                        
+                        # 3. Poner la zanahoria hacia adelante, pero sin pasarse de la esquina
+                        distancia_virtual = min(proyeccion + LOOKAHEAD_FIJO, L_linea)
+                        tx_zanahoria = ox + (distancia_virtual * ux)
+                        ty_zanahoria = oy + (distancia_virtual * uy)
+                        
+                        # 4. Calcular el Pure Pursuit hacia la ZANAHORIA
+                        dx_meta = tx_zanahoria - centro_carro_x
+                        dy_meta = ty_zanahoria - centro_carro_y
+                        dist_zanahoria = math.hypot(dx_meta, dy_meta)
+                        
+                        angulo_hacia_meta = math.atan2(dy_meta, dx_meta)
+                        alpha = angulo_hacia_meta - robot_yaw_visual
+                        alpha = (alpha + math.pi) % (2 * math.pi) - math.pi
+                        
+                        v_lineal = 0.15 # Velocidad en m/s
+                        ld_seguro = max(dist_zanahoria, 0.1) 
                         omega_ref = (2.0 * v_lineal * math.sin(alpha)) / ld_seguro
                         
                         MAX_OMEGA = 1.5 
                         omega_ref = max(-MAX_OMEGA, min(MAX_OMEGA, omega_ref))
-                    
-                    # 6. Enviamos el paquete a la Raspberry Pi
-                    mensaje_red = f"{v_lineal:.3f},{omega_ref:.3f},{dist_meta:.3f},{estado_mision}"
+                        
+                        # Dibujar la zanahoria (Punto a seguir)
+                        pt_zanahoria_radar = metros_a_pixeles_radar(tx_zanahoria, ty_zanahoria)
+                        cv2.circle(minimapa, pt_zanahoria_radar, 5, (255, 150, 0), -1)
+
+                    # Enviar por UDP (Mandamos dist_meta_real para que la Raspberry sepa cuándo parar)
+                    mensaje_red = f"{v_lineal:.3f},{omega_ref:.3f},{dist_meta_real:.3f},{estado_mision}"
                     sock_udp.sendto(mensaje_red.encode('utf-8'), (IP_RASPBERRY, PUERTO_UDP))
 
-                    # Gráficos de Meta
-                    pt_obj_radar = metros_a_pixeles_radar(tx, ty)
+                    # Dibujar línea y meta
+                    pt_obj_radar = metros_a_pixeles_radar(tx_fin, ty_fin)
                     cv2.line(minimapa, p_centro_radar, pt_obj_radar, (255, 0, 255), 2) 
                     cv2.circle(minimapa, pt_obj_radar, int(TOLERANCIA_LLEGADA_M * ESCALA_RADAR), (0, 255, 100), 1)
-                    cv2.putText(minimapa, f"Target: {nombre_objetivo}", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
                     
+                    # Textos en pantalla
+                    cv2.putText(minimapa, f"Target: {nombre_objetivo}", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
                     cv2.putText(cam_view, f"V: {v_lineal:.2f} m/s", (30, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                     cv2.putText(cam_view, f"W: {omega_ref:+.2f} rad/s", (30, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
         cv2.rectangle(minimapa, (0, 0), (399, 399), (255, 255, 255), 2)
         cam_view[20:420, 1280-420:1280-20] = minimapa
 
-        texto_estado = "MISION ACTIVA (Pure Pursuit)" if mision_activa else "ESPERANDO ('s' para Iniciar)"
+        texto_estado = "MISION ACTIVA" if mision_activa else "ESPERANDO ('s' para Iniciar)"
         color_estado = (0, 255, 0) if mision_activa else (0, 0, 255)
         cv2.putText(cam_view, texto_estado, (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, color_estado, 3)
-
         cv2.imshow("Dashboard Pickasso", cv2.resize(cam_view, (960, 540)))
         
         tecla = cv2.waitKey(1) & 0xFF

@@ -11,13 +11,12 @@ import threading
 # ==========================================
 # 1. CONFIGURACIÓN FÍSICA Y RED
 # ==========================================
-# Medidas del robot diferencial (Ajustar L_WHEELBASE_M físicamente)
-L_WHEELBASE_M = 0.30       # Distancia en metros entre el centro de la llanta izq y der
+# [AJUSTA ESTO] Distancia en metros entre los centros de llanta izq y der
+L_WHEELBASE_M = 0.30       
 DIAMETRO_LLANTA_MM = 127.7
 CIRCUNFERENCIA_M = (DIAMETRO_LLANTA_MM * math.pi) / 1000.0
 
-# PID de Velocidad Angular (Giroscopio)
-# Aumentar si no toma la curva lo suficientemente fuerte, bajar si oscila.
+# PID de Giroscopio. Ajustar si el carro no toma curvas bien.
 KP_OMEGA = 0.8  
 
 PUERTO_UDP = 5005
@@ -65,11 +64,9 @@ def frenar_y_limpiar():
     except: pass
 
 def aplicar_velocidades_recto(rpm_izq, rpm_der):
-    # Limitar RPMs físicos por seguridad
     rpm_izq = max(-80, min(80, rpm_izq))
     rpm_der = max(-80, min(80, rpm_der))
     
-    # 1: Adelante, 2: Atrás
     dir_1A, dir_1B = (1, 2) if rpm_izq >= 0 else (2, 1)
     dir_2A, dir_2B = (1, 2) if rpm_der >= 0 else (2, 1)
     
@@ -186,18 +183,16 @@ def hilo_pid_imu():
 
         # Leer velocidad angular real desde el giroscopio (Eje Z) en rad/s
         try:
-            # Si el sensor se montó con Z hacia arriba, una rotación a la izq es Z positivo.
             gyro_data = sensor_imu.gyro
             omega_real = gyro_data[2] if (gyro_data and gyro_data[2] is not None) else 0.0
         except:
             omega_real = 0.0
 
-        # Calcular el error de giro
+        # PID Cinemático
         error_omega = omega_ref - omega_real
         ajuste_pid = error_omega * KP_OMEGA
 
         # Cinemática Diferencial (Salida en m/s)
-        # V_R = V + (W*L)/2 y V_L = V - (W*L)/2
         v_izq_ms = v_ref - ((omega_ref * L_WHEELBASE_M) / 2.0) - ajuste_pid
         v_der_ms = v_ref + ((omega_ref * L_WHEELBASE_M) / 2.0) + ajuste_pid
 

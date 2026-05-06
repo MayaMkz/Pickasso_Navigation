@@ -19,7 +19,7 @@ PULSOS_POR_METRO = PULSOS_POR_REV / CIRCUNFERENCIA_M
 # Ganancias de Control PID Híbrido
 KP_RUMBO = 0.8       
 RPM_BASE = 20.0  
-KP_VISION_METROS = 150.0  # [NUEVO] Ganancia en metros (ej. 0.1m de error = 15 grados de volantazo)
+KP_VISION_METROS = 10.0  # [NUEVO] Ganancia en metros (ej. 0.1m de error = 15 grados de volantazo)
 
 # [EL INTERRUPTOR MÁGICO] 
 # Si el carrito se aleja de la línea en lugar de acercarse, cambia esto a True
@@ -301,7 +301,7 @@ try:
         correccion_vision = error_lateral_metros * KP_VISION_METROS
         
         # 4. Limitamos el "volantazo" a +/- 35 grados (permite correcciones agresivas pero seguras)
-        correccion_vision = max(-35.0, min(35.0, correccion_vision))
+        correccion_vision = max(-45.0, min(45.0, correccion_vision))
         
         # 5. Aplicamos la corrección (Usando el interruptor por si los ejes chocan)
         if INVERTIR_CORRECCION_VISION:

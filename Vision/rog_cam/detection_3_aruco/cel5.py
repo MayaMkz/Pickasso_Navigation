@@ -38,8 +38,8 @@ def main():
     IP_RASPBERRY = "192.168.137.240"                 
     PUERTO_UDP = 5005
 
-    TOLERANCIA_LLEGADA_M = 0.05
-    OFFSET_MESA_M = 0.35 # [CORRECTO] 10cm + 25cm (mitad del chasis)
+    TOLERANCIA_LLEGADA_M = 0.15 # Ampliado para evitar overshoot
+    OFFSET_MESA_M = 0.45 
 
     print(f"[*] Conectando a Cámara en {DROIDCAM_URL}...")
     try: cap = CamaraIP_UltraRapida(DROIDCAM_URL).start()
@@ -109,7 +109,8 @@ def main():
                 success, rvec, tvec = cv2.solvePnP(obj_points, corners[i][0], camera_matrix, zero_dist, flags=cv2.SOLVEPNP_IPPE_SQUARE)
                 if success:
                     cx, cy = int(np.mean(corners[i][0][:, 0])), int(np.mean(corners[i][0][:, 1]))
-                    memoria_tags[m_id] = {'m_x': tvec[0][0], 'm_y': tvec[1][0], 'm_z': tvec[2][0], 'c_x': cx, 'c_y': cy}
+                    # [NUEVO] Guardamos rvec y tvec completos para calcular el frente del robot
+                    memoria_tags[m_id] = {'m_x': tvec[0][0], 'm_y': tvec[1][0], 'm_z': tvec[2][0], 'c_x': cx, 'c_y': cy, 'rvec': rvec, 'tvec': tvec}
                     cv2.aruco.drawDetectedMarkers(cam_view, corners)
                     color = (0, 165, 255) if m_id == 0 else (0, 255, 0)
                     cv2.putText(cam_view, f"Tag {m_id}" if m_id!=0 else "Robot", (cx-40, cy-40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
@@ -123,12 +124,11 @@ def main():
             
             cz = (t1z + t2z) / 2.0
             
-            # Formamos el rectángulo perfecto de la mesa cruzando X y Y
             mesa_pts = [
-                (t1x, t1y, t1z),   # Esquina 1 (Tag 1)
-                (t2x, t1y, cz),    # Esquina 2 (Virtual)
-                (t2x, t2y, t2z),   # Esquina 3 (Tag 2)
-                (t1x, t2y, cz)     # Esquina 4 (Virtual)
+                (t1x, t1y, t1z),   
+                (t2x, t1y, cz),    
+                (t2x, t2y, t2z),   
+                (t1x, t2y, cz)     
             ]
 
             centro_mesa_x = (t1x + t2x) / 2.0
@@ -141,7 +141,6 @@ def main():
 
             ruta_pts_global = [expandir_punto(*p) for p in mesa_pts]
 
-            # --- DIBUJOS ---
             pts_radar_mesa = np.array([metros_a_pixeles_radar(p[0], p[1]) for p in mesa_pts], np.int32).reshape((-1, 1, 2))
             cv2.polylines(minimapa, [pts_radar_mesa], isClosed=True, color=(255, 150, 50), thickness=2)
             
@@ -157,31 +156,53 @@ def main():
                 pts_2d_ruta, _ = cv2.projectPoints(pts_3d_ruta, np.zeros((3,1)), np.zeros((3,1)), camera_matrix, zero_dist)
                 cv2.polylines(cam_view, [np.int32(pts_2d_ruta).reshape((-1,1,2))], isClosed=True, color=(0, 255, 0), thickness=3)
 
-            # --- RESTAURACIÓN DE MEDIDAS REALES ---
             ancho_mesa = abs(t1x - t2x)
             largo_mesa = abs(t1y - t2y)
-            ancho_ruta = ancho_mesa + (2 * OFFSET_MESA_M)
-            largo_ruta = largo_mesa + (2 * OFFSET_MESA_M)
-            
             txt_mesa = f"Mesa: {ancho_mesa:.2f}m x {largo_mesa:.2f}m"
-            txt_ruta = f"Ruta Offset: {ancho_ruta:.2f}m x {largo_ruta:.2f}m"
             cv2.putText(cam_view, txt_mesa, (30, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 150, 50), 2)
-            cv2.putText(cam_view, txt_ruta, (30, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
+        # =========================================================
+        # [NUEVO] POSE 6D: FLECHA Y ORIENTACIÓN DEL ROBOT
+        # =========================================================
         if 0 in memoria_tags:
             rx, ry = memoria_tags[0]['m_x'], memoria_tags[0]['m_y']
-            p_robot_radar = metros_a_pixeles_radar(rx, ry)
+            rvec, tvec = memoria_tags[0]['rvec'], memoria_tags[0]['tvec']
             
+            # 1. Convertimos el vector de rotación en una Matriz de Rotación 3x3
+            R, _ = cv2.Rodrigues(rvec)
+            
+            # 2. Vector apuntando hacia el "Frente" (La parte de arriba del tag es -Y)
+            vector_frente_local = np.array([[0.0], [-0.15], [0.0]]) # 15 cm al frente
+            vector_frente_cam = R @ vector_frente_local
+            
+            fx = rx + vector_frente_cam[0][0]
+            fy = ry + vector_frente_cam[1][0]
+            
+            # 3. Calculamos el ángulo visual del robot (Yaw Absoluto)
+            robot_yaw_visual = math.atan2(vector_frente_cam[1][0], vector_frente_cam[0][0])
+            
+            # 4. Dibujar Flecha en el Minimapa
+            p_robot_radar = metros_a_pixeles_radar(rx, ry)
+            p_frente_radar = metros_a_pixeles_radar(fx, fy)
+            cv2.arrowedLine(minimapa, p_robot_radar, p_frente_radar, (0, 0, 255), 2, tipLength=0.3)
+            
+            # 5. Dibujar Flecha en la Cámara 3D
+            pt3d = np.array([[0.0, -0.15, 0.0]], dtype=np.float32)
+            pt2d, _ = cv2.projectPoints(pt3d, rvec, tvec, camera_matrix, zero_dist)
+            px, py = int(pt2d[0][0][0]), int(pt2d[0][0][1])
+            cx, cy = memoria_tags[0]['c_x'], memoria_tags[0]['c_y']
+            cv2.arrowedLine(cam_view, (cx, cy), (px, py), (0, 0, 255), 4, tipLength=0.3)
+
+            # --- RASTREO Y NAVEGACIÓN ---
             if not estela_robot or estela_robot[-1] != p_robot_radar: estela_robot.append(p_robot_radar)
             for i in range(1, len(estela_robot)):
                 cv2.line(minimapa, estela_robot[i-1], estela_robot[i], (0, 100, 255), int(np.interp(i, [0, len(estela_robot)], [1, 3])))
-            cv2.circle(minimapa, p_robot_radar, 8, (0, 165, 255), -1)
 
             if mision_activa and len(ruta_pts_global) == 4:
-                if estado_mision == 1: objetivo_actual = ruta_pts_global[0]; nombre_objetivo = "1. Est.1 (Margen Seguro)"
-                elif estado_mision == 2: objetivo_actual = ruta_pts_global[1]; nombre_objetivo = "2. Esq. Virtual 1"
-                elif estado_mision == 3: objetivo_actual = ruta_pts_global[2]; nombre_objetivo = "3. Est.2 (Margen Seguro)"
-                elif estado_mision == 4: objetivo_actual = ruta_pts_global[3]; nombre_objetivo = "4. Esq. Virtual 2"
+                if estado_mision == 1: objetivo_actual = ruta_pts_global[0]; nombre_objetivo = "1. Est.1"
+                elif estado_mision == 2: objetivo_actual = ruta_pts_global[1]; nombre_objetivo = "2. Esq. 1"
+                elif estado_mision == 3: objetivo_actual = ruta_pts_global[2]; nombre_objetivo = "3. Est.2"
+                elif estado_mision == 4: objetivo_actual = ruta_pts_global[3]; nombre_objetivo = "4. Esq. 2"
 
                 if objetivo_actual:
                     tx, ty, _ = objetivo_actual
@@ -189,13 +210,23 @@ def main():
                     dy = ty - ry
                     dist = math.hypot(dx, dy)
                     
-                    mensaje_red = f"{dx},{dy},{dist},{sentido_giro_global}"
+                    # [LA MAGIA] Calculamos el error angular exacto directo en la cámara
+                    target_yaw = math.atan2(dy, dx)
+                    error_angular_grados = math.degrees(target_yaw - robot_yaw_visual)
+                    # Normalizar entre -180 y 180
+                    error_angular_grados = (error_angular_grados + 180) % 360 - 180
+                    
+                    # [NUEVO PAYLOAD] Agregamos el error_angular como el 5to dato
+                    mensaje_red = f"{dx},{dy},{dist},{sentido_giro_global},{error_angular_grados:.2f}"
                     sock_udp.sendto(mensaje_red.encode('utf-8'), (IP_RASPBERRY, PUERTO_UDP))
 
                     pt_obj_radar = metros_a_pixeles_radar(tx, ty)
                     cv2.line(minimapa, p_robot_radar, pt_obj_radar, (0, 255, 255), 2)
                     cv2.circle(minimapa, pt_obj_radar, int(TOLERANCIA_LLEGADA_M * ESCALA_RADAR), (0, 255, 100), 1)
                     cv2.putText(minimapa, f"Target: {nombre_objetivo}", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+                    
+                    txt_error = f"Error Angular: {error_angular_grados:+.1f} deg"
+                    cv2.putText(cam_view, txt_error, (30, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
                     if dist <= TOLERANCIA_LLEGADA_M:
                         estado_mision += 1

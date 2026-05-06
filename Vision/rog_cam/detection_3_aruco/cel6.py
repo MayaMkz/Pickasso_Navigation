@@ -39,7 +39,7 @@ def main():
     PUERTO_UDP = 5005
 
     TOLERANCIA_LLEGADA_M = 0.08  
-    OFFSET_MESA_M = 0.40         
+    OFFSET_MESA_M = 0.35         
 
     print(f"[*] Conectando a Cámara en {DROIDCAM_URL}...")
     try: cap = CamaraIP_UltraRapida(DROIDCAM_URL).start()
@@ -140,7 +140,7 @@ def main():
             cv2.polylines(minimapa, [pts_radar_ruta], isClosed=True, color=(0, 255, 0), thickness=2)
 
         # =========================================================
-        # NAVEGACIÓN PURE PURSUIT (ALGORITMO DE SEGUIMIENTO)
+        # NAVEGACIÓN PURE PURSUIT Y CINEMÁTICA
         # =========================================================
         if 0 in memoria_tags:
             rx, ry = memoria_tags[0]['m_x'], memoria_tags[0]['m_y']
@@ -148,15 +148,31 @@ def main():
             
             # Matriz de Rotación y Orientación
             R, _ = cv2.Rodrigues(rvec)
+            
+            # 1. Frente visual para la flecha indicadora
             vector_frente_cam = R @ np.array([[0.0], [-0.15], [0.0]])
             fx, fy = rx + vector_frente_cam[0][0], ry + vector_frente_cam[1][0]
             robot_yaw_visual = math.atan2(vector_frente_cam[1][0], vector_frente_cam[0][0])
             
-            p_robot_radar = metros_a_pixeles_radar(rx, ry)
-            p_frente_radar = metros_a_pixeles_radar(fx, fy)
-            cv2.arrowedLine(minimapa, p_robot_radar, p_frente_radar, (0, 0, 255), 2, tipLength=0.3)
+            # -----------------------------------------------------------------
+            # 2. COMPENSACIÓN DEL CENTRO DEL CARRO (AJUSTA ESTO)
+            # -----------------------------------------------------------------
+            OFFSET_X_TAG = 0.0    # 0 si el tag está centrado a lo ancho
+            OFFSET_Y_TAG = 0.08   # <--- PON AQUÍ TU MEDIDA EN METROS (ej. 8cm hacia el frente)
+            
+            vector_offset = R @ np.array([[OFFSET_X_TAG], [OFFSET_Y_TAG], [0.0]])
+            centro_carro_x = rx + vector_offset[0][0]
+            centro_carro_y = ry + vector_offset[1][0]
 
-            if not estela_robot or estela_robot[-1] != p_robot_radar: estela_robot.append(p_robot_radar)
+            # 3. Gráficos en Radar
+            p_centro_radar = metros_a_pixeles_radar(centro_carro_x, centro_carro_y) # Centro Real
+            p_frente_radar = metros_a_pixeles_radar(fx, fy)
+            
+            # Dibujar flecha desde el centro real y un punto azul marcando el centro
+            cv2.arrowedLine(minimapa, p_centro_radar, p_frente_radar, (0, 0, 255), 2, tipLength=0.3)
+            cv2.circle(minimapa, p_centro_radar, 4, (255, 0, 0), -1)
+
+            if not estela_robot or estela_robot[-1] != p_centro_radar: estela_robot.append(p_centro_radar)
             for i in range(1, len(estela_robot)):
                 cv2.line(minimapa, estela_robot[i-1], estela_robot[i], (0, 100, 255), int(np.interp(i, [0, len(estela_robot)], [1, 3])))
 
@@ -174,43 +190,37 @@ def main():
                 if objetivo_actual:
                     tx, ty, _ = objetivo_actual
                     
-                    # Distancia de llegada al waypoint (Lookahead distance)
-                    dx_meta, dy_meta = tx - rx, ty - ry
+                    # 4. Cálculo de distancias usando el CENTRO REAL
+                    dx_meta, dy_meta = tx - centro_carro_x, ty - centro_carro_y
                     dist_meta = math.hypot(dx_meta, dy_meta)
                     
-                    # 1. Ángulo hacia la meta (Alpha) relativo al frente del robot
+                    # Ángulo hacia la meta (Alpha) relativo al frente del robot
                     angulo_hacia_meta = math.atan2(dy_meta, dx_meta)
                     alpha = angulo_hacia_meta - robot_yaw_visual
-                    # Normalizar entre -pi y pi para tomar el camino más corto
                     alpha = (alpha + math.pi) % (2 * math.pi) - math.pi
                     
-                    # 2. Cinemática de Pure Pursuit
-                    v_lineal = 0.15  # Velocidad base en m/s (Aprox. 22 RPM)
+                    # 5. Cinemática de Pure Pursuit
+                    v_lineal = 0.15  # Velocidad base en m/s
                     
                     if dist_meta <= TOLERANCIA_LLEGADA_M:
-                        # Si llegamos, frenar y avanzar de estado
                         v_lineal = 0.0
                         omega_ref = 0.0
                         estado_mision += 1
                         if estado_mision > 4: mision_activa = False
                     else:
-                        # Fórmula del arco circular: omega = (2 * v * sin(alpha)) / Ld
-                        # Usamos 'dist_meta' como Ld si no es muy pequeño para evitar infinito
                         ld_seguro = max(dist_meta, 0.1) 
                         omega_ref = (2.0 * v_lineal * math.sin(alpha)) / ld_seguro
                         
-                        # Limitar la velocidad angular por seguridad (rad/s)
                         MAX_OMEGA = 1.5 
                         omega_ref = max(-MAX_OMEGA, min(MAX_OMEGA, omega_ref))
                     
-                    # 3. Enviamos el paquete a la Raspberry Pi
-                    # Formato: v_lineal, omega_ref, dist_meta, estado_mision
+                    # 6. Enviamos el paquete a la Raspberry Pi
                     mensaje_red = f"{v_lineal:.3f},{omega_ref:.3f},{dist_meta:.3f},{estado_mision}"
                     sock_udp.sendto(mensaje_red.encode('utf-8'), (IP_RASPBERRY, PUERTO_UDP))
 
-                    # Gráficos en UI
+                    # Gráficos de Meta
                     pt_obj_radar = metros_a_pixeles_radar(tx, ty)
-                    cv2.line(minimapa, p_robot_radar, pt_obj_radar, (255, 0, 255), 2) 
+                    cv2.line(minimapa, p_centro_radar, pt_obj_radar, (255, 0, 255), 2) 
                     cv2.circle(minimapa, pt_obj_radar, int(TOLERANCIA_LLEGADA_M * ESCALA_RADAR), (0, 255, 100), 1)
                     cv2.putText(minimapa, f"Target: {nombre_objetivo}", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
                     

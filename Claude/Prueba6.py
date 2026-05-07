@@ -68,7 +68,7 @@ OMEGA_TOTAL_MAX = 1.4   # rad/s
 TIMEOUT_VISION_S = 1.0
 
 # RPM para los giros de 90° en las esquinas.
-RPM_GIRO = 22   # rpm  ← si el giro se pasa o no llega, ajusta aquí
+RPM_GIRO = 15   # rpm  ← si el giro se pasa o no llega, ajusta aquí
 
 # ══════════════════════════════════════════════════════════════════════
 #  RED

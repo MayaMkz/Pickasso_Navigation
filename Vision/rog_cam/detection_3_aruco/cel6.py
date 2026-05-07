@@ -53,11 +53,11 @@ def main():
     # =================================================================
     # PARÁMETROS CRÍTICOS DE NAVEGACIÓN Y FÍSICA
     # =================================================================
-    OFFSET_MESA_M = 0.4 
+    OFFSET_MESA_M = 0.25  
     LOOKAHEAD_FIJO = 0.20  
-    TOLERANCIA_LLEGADA_M = 0.05  
+    TOLERANCIA_LLEGADA_M = 0.08  
     OFFSET_X_TAG = 0.00    
-    OFFSET_Y_TAG = 0.15    
+    OFFSET_Y_TAG = 0.10    
 
     print(f"[*] Conectando a Cámara en {DROIDCAM_URL}...")
     try: cap = CamaraIP_UltraRapida(DROIDCAM_URL).start()
@@ -86,7 +86,12 @@ def main():
         dist_coeffs = fs.getNode("dist_coeffs").mat()
         fs.release()
         print("[OK] Calibración cargada.")
-    
+    else:
+        print("[!] No se encontró calibración. Usando valores por defecto.")
+        w, h = 640, 480
+        focal_length = w * 0.9 
+        camera_matrix = np.array([[focal_length, 0, w / 2], [0, focal_length, h / 2], [0, 0, 1]], dtype=np.float32)
+        dist_coeffs = np.zeros((4, 1))
     
     aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
     aruco_params = cv2.aruco.DetectorParameters()
@@ -236,7 +241,7 @@ def main():
                         alpha = angulo_hacia_meta - robot_yaw_visual
                         alpha = (alpha + math.pi) % (2 * math.pi) - math.pi
                         
-                        v_lineal = 0.2 
+                        v_lineal = 0.15 
                         ld_seguro = max(dist_zanahoria, 0.1) 
                         omega_ref = (2.0 * v_lineal * math.sin(alpha)) / ld_seguro
                         

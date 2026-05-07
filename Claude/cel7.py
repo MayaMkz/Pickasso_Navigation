@@ -184,7 +184,7 @@ def main():
     aruco_params.adaptiveThreshWinSizeStep = 10
     detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
 
-    hs         = 0.063 / 2.0
+    hs         = 0.087 / 2.0
     obj_points = np.array([[-hs,  hs, 0], [ hs,  hs, 0],
                             [ hs, -hs, 0], [-hs, -hs, 0]], dtype=np.float32)
 

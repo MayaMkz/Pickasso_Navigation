@@ -17,6 +17,10 @@ BUGS CORREGIDOS respecto a cel6(2).py
         ANTES : la "zanahoria" y líneas usaban coords radar sobre cam_view.
         AHORA : todo se proyecta con projectPoints, radar sólo es minimap.
 
+[BUG 4] Doble Distorsión y Escala ArUco
+        Se eliminó cv2.remap previo al solvePnP para no aplastar el 3D.
+        Se ajustó el marcador ArUco a su tamaño físico real (8.7 cm).
+
 [MEJORA] Minimap compacto en esquina superior derecha (no ocupa el frame).
 
 PARÁMETROS DE SINTONIZACIÓN — busca la sección [TUNING] abajo.
@@ -103,47 +107,26 @@ def main():
     #  [TUNING A] GEOMETRÍA DEL ROBOT  ← medir con cinta métrica
     # ══════════════════════════════════════════════════════════════
     # OFFSET_X_TAG  : desplazamiento lateral del tag respecto al centroide.
-    #   +X = tag está a la DERECHA del centroide.
-    #   Ej.: tag centrado → 0.00
-    OFFSET_X_TAG = 0.00   # m  ← MEDIR
+    OFFSET_X_TAG = 0.00   # m
 
     # OFFSET_Y_TAG  : desplazamiento longitudinal del tag respecto al centroide.
-    #   +Y en frame de cámara cenital = ATRÁS del robot (nariz apunta a -Y).
-    #   Si el tag está DETRÁS del centroide → valor positivo.
-    #   Ej.: tag 15 cm detrás del centroide → 0.15
-    OFFSET_Y_TAG = 0.15   # m  ← MEDIR  (este era tu valor original)
+    OFFSET_Y_TAG = 0.15   # m
 
     # ══════════════════════════════════════════════════════════════
     #  [TUNING B] GEOMETRÍA DE LA RUTA
     # ══════════════════════════════════════════════════════════════
     # OFFSET_MESA_M : expansión del rectángulo alrededor de la mesa.
-    #   Objetivo: que la llanta más cercana quede a ≥10 cm de la mesa.
-    #   Valor recomendado = (ancho_chasis / 2) + 0.10 m
-    OFFSET_MESA_M = 0.40   # m  ← ajustar según ancho del carro
+    OFFSET_MESA_M = 0.40   # m
 
     # TOLERANCIA_LLEGADA_M : radio de captura del waypoint.
-    #   Muy grande → gira antes de llegar. Muy pequeño → no captura.
     TOLERANCIA_LLEGADA_M = 0.05   # m
 
     # ══════════════════════════════════════════════════════════════
     #  [TUNING C] PURE PURSUIT
     # ══════════════════════════════════════════════════════════════
-    # LOOKAHEAD_FIJO : distancia de la "zanahoria" adelante del robot (m).
-    #   Grande → curvas suaves, menos preciso en rectas.
-    #   Pequeño → más preciso, puede oscilar.
-    #   Rango útil: 0.10 – 0.35 m
     LOOKAHEAD_FIJO = 0.20   # m
-
-    # V_LINEAL : velocidad de crucero (m/s).
-    #   Sube una vez que el control sea estable.
-    #   Rango útil: 0.08 – 0.25 m/s
     V_LINEAL = 0.08   # m/s
-
-    # V_APROX_FACTOR : fracción de V_LINEAL al acercarse al waypoint.
     V_APROX_FACTOR = 0.60   # sin unidades  (0.5 = 50% de velocidad)
-
-    # MAX_OMEGA : techo de velocidad angular (rad/s).
-    #   ~1.2 rad/s ≈ 69°/s, suficiente para un AGV lento.
     MAX_OMEGA = 1.2   # rad/s
 
     # ══════════════════════════════════════════════════════════════
@@ -174,9 +157,6 @@ def main():
                       [0,     0,   1]], dtype=np.float32)
         D = np.zeros((4, 1))
 
-    # Mapa de undistort precalculado para 640×480
-    map1, map2 = cv2.initUndistortRectifyMap(K, D, None, K, (640, 480), cv2.CV_32FC1)
-
     # ── ArUco ───────────────────────────────────────────────────
     aruco_dict   = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
     aruco_params = cv2.aruco.DetectorParameters()
@@ -184,6 +164,7 @@ def main():
     aruco_params.adaptiveThreshWinSizeStep = 10
     detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
 
+    # ---> AQUÍ ESTÁ LA CORRECCIÓN DE TAMAÑO (8.7 cm) <---
     hs         = 0.087 / 2.0
     obj_points = np.array([[-hs,  hs, 0], [ hs,  hs, 0],
                             [ hs, -hs, 0], [-hs, -hs, 0]], dtype=np.float32)
@@ -217,8 +198,8 @@ def main():
             time.sleep(0.005)
             continue
 
-        # Undistort (corrección de lente)
-        cam_view = cv2.remap(frame_raw, map1, map2, cv2.INTER_LINEAR)
+        # ---> AQUÍ ESTÁ LA CORRECCIÓN DE DISTORSIÓN (Imagen cruda) <---
+        cam_view = frame_raw.copy()
 
         # Minimap limpio
         mm = np.zeros((MM_SIZE, MM_SIZE, 3), np.uint8)

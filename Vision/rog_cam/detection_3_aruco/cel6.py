@@ -4,43 +4,48 @@ import math
 import threading
 import socket
 import time
+import urllib.request
 from collections import deque
 
 # ==========================================
-# CÁMARA TURBO (CERO LATENCIA Y ANTI-DUPLICADOS)
+# CÁMARA TURBO (CERO LATENCIA Y ESCALADO SEGURO)
 # ==========================================
 class CamaraIP_UltraRapida:
     def __init__(self, url):
-        self.stream = cv2.VideoCapture(url)
-        # Resolución optimizada para cero lag
-        self.stream.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self.stream.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        self.stream.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        if not self.stream.isOpened(): raise Exception("Error DroidCam.")
-        (self.grabbed, self.frame) = self.stream.read()
+        # Cambiamos /video por /shot.jpg para pedir la foto instantánea sin buffer
+        self.url = url.replace("/video", "/shot.jpg")
+        self.frame = None
         self.stopped = False
-        self.frame_nuevo = True
 
     def start(self):
+        print(f"[*] Conectando directo al sensor en: {self.url}")
         threading.Thread(target=self.update, args=(), daemon=True).start()
+        # Esperamos a que baje la primera foto para arrancar seguros
+        while self.frame is None and not self.stopped:
+            time.sleep(0.1)
         return self
 
     def update(self):
         while not self.stopped:
-            if not self.grabbed: 
-                self.stop()
-            else: 
-                (self.grabbed, self.frame) = self.stream.read()
-                self.frame_nuevo = True
+            try:
+                # Descarga la imagen bypasseando el motor pesado de video de OpenCV
+                resp = urllib.request.urlopen(self.url, timeout=0.5)
+                img_np = np.asarray(bytearray(resp.read()), dtype=np.uint8)
+                img_original = cv2.imdecode(img_np, -1)
+                
+                # ---> RESCATAMOS TU CALIBRACIÓN <---
+                # Forzamos la imagen a 640x480 sin importar cómo la mande el celular
+                self.frame = cv2.resize(img_original, (640, 480))
+            except Exception as e:
+                pass # Si hay microcorte de red, simplemente ignora y vuelve a intentar
 
-    def read(self): 
-        if self.frame_nuevo:
-            self.frame_nuevo = False
-            return self.frame
-        return None
+    def read(self):
+        f = self.frame
+        self.frame = None  # Vaciamos la variable para obligar a esperar una imagen NUEVA
+        return f
 
-    def stop(self): 
-        self.stopped = True; self.stream.release()
+    def stop(self):
+        self.stopped = True
 
 # ==========================================
 # PROGRAMA PRINCIPAL
@@ -53,13 +58,12 @@ def main():
     # =================================================================
     # PARÁMETROS CRÍTICOS DE NAVEGACIÓN Y FÍSICA
     # =================================================================
-    OFFSET_MESA_M = 0.25  
+    OFFSET_MESA_M = 0.40
     LOOKAHEAD_FIJO = 0.20  
-    TOLERANCIA_LLEGADA_M = 0.08  
+    TOLERANCIA_LLEGADA_M = 0.05  
     OFFSET_X_TAG = 0.00    
-    OFFSET_Y_TAG = 0.10    
+    OFFSET_Y_TAG = 0.15    
 
-    print(f"[*] Conectando a Cámara en {DROIDCAM_URL}...")
     try: cap = CamaraIP_UltraRapida(DROIDCAM_URL).start()
     except Exception as e: print(f"[!] {e}"); return
 
@@ -78,16 +82,15 @@ def main():
     nombre_objetivo = ""
     posicion_home = None 
 
-    print("[*] Buscando archivo de calibración...")
+    print("[*] Buscando archivo de calibración original...")
     fs = cv2.FileStorage("parametros_droidcam.yaml", cv2.FILE_STORAGE_READ)
-    
     if fs.isOpened():
         camera_matrix = fs.getNode("camera_matrix").mat()
         dist_coeffs = fs.getNode("dist_coeffs").mat()
         fs.release()
         print("[OK] Calibración cargada.")
     else:
-        print("[!] No se encontró calibración. Usando valores por defecto.")
+        print("[!] No se encontró calibración. Usando default a 640x480.")
         w, h = 640, 480
         focal_length = w * 0.9 
         camera_matrix = np.array([[focal_length, 0, w / 2], [0, focal_length, h / 2], [0, 0, 1]], dtype=np.float32)
@@ -96,7 +99,7 @@ def main():
     aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
     aruco_params = cv2.aruco.DetectorParameters()
     
-    # OPTIMIZACIÓN DE ARUCO PARA VELOCIDAD
+    # OPTIMIZACIÓN: Búsqueda rápida de tags
     aruco_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_NONE
     aruco_params.adaptiveThreshWinSizeStep = 20 
     
@@ -114,12 +117,12 @@ def main():
     while True:
         cv_image_raw = cap.read()
         
-        # Bandera de FPS: descansa CPU si no hay frame nuevo
+        # Sincronizador de FPS: Descansa el CPU hasta que el hilo descargue la nueva foto
         if cv_image_raw is None: 
             time.sleep(0.005)
             continue
 
-        # Convertir a grises directamente (sin remap)
+        # Procesamiento en gris para velocidad máxima
         gray = cv2.cvtColor(cv_image_raw, cv2.COLOR_BGR2GRAY)
         cam_view = cv_image_raw.copy()
         
@@ -129,13 +132,13 @@ def main():
             cv2.line(minimapa, (i, 0), (i, 400), (30, 30, 30), 1)
             cv2.line(minimapa, (0, i), (400, i), (30, 30, 30), 1)
 
-        # Detectar ArUcos
+        # Buscar tags en la imagen en blanco y negro cruda
         corners, ids, _ = detector.detectMarkers(gray)
 
         if ids is not None:
             for i in range(len(ids)):
                 m_id = int(ids[i][0])
-                # Pasamos dist_coeffs directamente aquí para que ArUco maneje su propia distorsión
+                # Aplicamos la distorsión original directo aquí
                 success, rvec, tvec = cv2.solvePnP(obj_points, corners[i][0], camera_matrix, dist_coeffs, flags=cv2.SOLVEPNP_IPPE_SQUARE)
                 if success:
                     cx, cy = int(np.mean(corners[i][0][:, 0])), int(np.mean(corners[i][0][:, 1]))
@@ -262,9 +265,12 @@ def main():
                     cv2.putText(cam_view, f"V: {v_lineal:.2f} m/s", (30, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                     cv2.putText(cam_view, f"W: {omega_ref:+.2f} rad/s", (30, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
-        # Limitar la inserción del minimapa para que no se salga de la ventana de 640x480
+        # Pintamos el minimapa en la esquina de la imagen de 640x480
         cv2.rectangle(minimapa, (0, 0), (399, 399), (255, 255, 255), 2)
-        cam_view[20:420, 640-420:640-20] = minimapa  
+        try:
+            cam_view[20:420, 640-420:640-20] = minimapa  
+        except:
+            pass 
 
         texto_estado = "MISION ACTIVA" if mision_activa else "ESPERANDO ('s' para Iniciar)"
         color_estado = (0, 255, 0) if mision_activa else (0, 0, 255)

@@ -8,44 +8,53 @@ import urllib.request
 from collections import deque
 
 # ==========================================
-# CÁMARA TURBO (CERO LATENCIA Y ESCALADO SEGURO)
+# CÁMARA TURBO (CERO LATENCIA - VERSIÓN DROIDCAM SEGURA)
 # ==========================================
 class CamaraIP_UltraRapida:
     def __init__(self, url):
-        # Cambiamos /video por /shot.jpg para pedir la foto instantánea sin buffer
-        self.url = url.replace("/video", "/shot.jpg")
-        self.frame = None
+        self.stream = cv2.VideoCapture(url)
+        # Forzamos un buffer minúsculo para evitar retrasos
+        self.stream.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        
+        if not self.stream.isOpened():
+            raise Exception("No se pudo conectar a DroidCam. Revisa la IP.")
+            
         self.stopped = False
+        self.frame_fresco = None
 
     def start(self):
-        print(f"[*] Conectando directo al sensor en: {self.url}")
-        threading.Thread(target=self.update, args=(), daemon=True).start()
-        # Esperamos a que baje la primera foto para arrancar seguros
-        while self.frame is None and not self.stopped:
+        print(f"[*] Conectando a stream de video en: {self.stream.getBackendName()}")
+        threading.Thread(target=self.update, daemon=True).start()
+        
+        # Esperamos el primer frame para arrancar con seguridad
+        while self.frame_fresco is None and not self.stopped:
             time.sleep(0.1)
+        print("[OK] Video recibido y escalado a 640x480.")
         return self
 
     def update(self):
         while not self.stopped:
-            try:
-                # Descarga la imagen bypasseando el motor pesado de video de OpenCV
-                resp = urllib.request.urlopen(self.url, timeout=0.5)
-                img_np = np.asarray(bytearray(resp.read()), dtype=np.uint8)
-                img_original = cv2.imdecode(img_np, -1)
+            # .grab() jala el frame de la red rapidísimo sin decodificar la imagen
+            # Esto vacía el buffer acumulado y mata el lag
+            grabbed = self.stream.grab()
+            if grabbed:
+                # .retrieve() convierte esos datos en una imagen real
+                _, img_raw = self.stream.retrieve()
                 
-                # ---> RESCATAMOS TU CALIBRACIÓN <---
-                # Forzamos la imagen a 640x480 sin importar cómo la mande el celular
-                self.frame = cv2.resize(img_original, (640, 480))
-            except Exception as e:
-                pass # Si hay microcorte de red, simplemente ignora y vuelve a intentar
+                # ---> ¡AQUÍ RESCATAMOS TU CALIBRACIÓN! <---
+                # Aplastamos la imagen a 640x480 al instante
+                self.frame_fresco = cv2.resize(img_raw, (640, 480))
+            else:
+                self.stop()
 
     def read(self):
-        f = self.frame
-        self.frame = None  # Vaciamos la variable para obligar a esperar una imagen NUEVA
+        f = self.frame_fresco
+        self.frame_fresco = None  # Lo borramos para obligar al programa a esperar uno nuevo
         return f
 
     def stop(self):
         self.stopped = True
+        self.stream.release()
 
 # ==========================================
 # PROGRAMA PRINCIPAL

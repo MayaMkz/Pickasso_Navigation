@@ -3,20 +3,23 @@ import numpy as np
 import math
 import threading
 import socket
+import time
 from collections import deque
 
 # ==========================================
-# CÁMARA TURBO (CERO LATENCIA)
+# CÁMARA TURBO (CERO LATENCIA Y ANTI-DUPLICADOS)
 # ==========================================
 class CamaraIP_UltraRapida:
     def __init__(self, url):
         self.stream = cv2.VideoCapture(url)
-        self.stream.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        self.stream.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        # Resolución optimizada para cero lag
+        self.stream.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.stream.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         self.stream.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         if not self.stream.isOpened(): raise Exception("Error DroidCam.")
         (self.grabbed, self.frame) = self.stream.read()
         self.stopped = False
+        self.frame_nuevo = True
 
     def start(self):
         threading.Thread(target=self.update, args=(), daemon=True).start()
@@ -24,11 +27,20 @@ class CamaraIP_UltraRapida:
 
     def update(self):
         while not self.stopped:
-            if not self.grabbed: self.stop()
-            else: (self.grabbed, self.frame) = self.stream.read()
+            if not self.grabbed: 
+                self.stop()
+            else: 
+                (self.grabbed, self.frame) = self.stream.read()
+                self.frame_nuevo = True
 
-    def read(self): return self.frame
-    def stop(self): self.stopped = True; self.stream.release()
+    def read(self): 
+        if self.frame_nuevo:
+            self.frame_nuevo = False
+            return self.frame
+        return None
+
+    def stop(self): 
+        self.stopped = True; self.stream.release()
 
 # ==========================================
 # PROGRAMA PRINCIPAL
@@ -41,24 +53,11 @@ def main():
     # =================================================================
     # PARÁMETROS CRÍTICOS DE NAVEGACIÓN Y FÍSICA
     # =================================================================
-    
-    # 1. OFFSET DE LA MESA (MANTENER 10cm PARA LA LLANTA INTERNA)
-    # Fórmula: 0.10m + (L_WHEELBASE_M / 2)
-    # Si tu carro mide 30cm entre llantas, la mitad son 15cm. 10cm + 15cm = 25cm.
-    OFFSET_MESA_M = 0.25  
-
-    # 2. PUNTO OBJETIVO (LA ZANAHORIA)
-    # Distancia a la que el robot persigue el punto sobre la línea.
-    LOOKAHEAD_FIJO = 0.20  # 20 cm. Más bajo = más agresivo. Más alto = más suave.
-    
-    # 3. DISTANCIA PARA CONSIDERAR QUE LLEGÓ A LA ESQUINA
-    TOLERANCIA_LLEGADA_M = 0.08  
-
-    # 4. COMPENSACIÓN DEL ARUCO DESCENTRADO (Medido desde el centro de las 4 llantas)
-    OFFSET_X_TAG = 0.00    # Metros izquierda/derecha (0 si está al centro a lo ancho)
-    OFFSET_Y_TAG = 0.10    # Metros hacia el frente (ej. 10cm = 0.10)
-
-    # =================================================================
+    OFFSET_MESA_M = 0.4 
+    LOOKAHEAD_FIJO = 0.20  
+    TOLERANCIA_LLEGADA_M = 0.05  
+    OFFSET_X_TAG = 0.00    
+    OFFSET_Y_TAG = 0.15    
 
     print(f"[*] Conectando a Cámara en {DROIDCAM_URL}...")
     try: cap = CamaraIP_UltraRapida(DROIDCAM_URL).start()
@@ -81,22 +80,21 @@ def main():
 
     print("[*] Buscando archivo de calibración...")
     fs = cv2.FileStorage("parametros_droidcam.yaml", cv2.FILE_STORAGE_READ)
+    
     if fs.isOpened():
         camera_matrix = fs.getNode("camera_matrix").mat()
         dist_coeffs = fs.getNode("dist_coeffs").mat()
         fs.release()
-        w, h = 1280, 720 
-        map1, map2 = cv2.initUndistortRectifyMap(camera_matrix, dist_coeffs, None, camera_matrix, (w, h), cv2.CV_32FC1)
-    else:
-        w, h = 1280, 720
-        focal_length = w * 0.9 
-        camera_matrix = np.array([[focal_length, 0, w / 2], [0, focal_length, h / 2], [0, 0, 1]], dtype=np.float32)
-        dist_coeffs = np.zeros((4, 1))
-        map1, map2 = cv2.initUndistortRectifyMap(camera_matrix, dist_coeffs, None, camera_matrix, (w,h), cv2.CV_32FC1)
+        print("[OK] Calibración cargada.")
     
-    zero_dist = np.zeros((4, 1))
+    
     aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
     aruco_params = cv2.aruco.DetectorParameters()
+    
+    # OPTIMIZACIÓN DE ARUCO PARA VELOCIDAD
+    aruco_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_NONE
+    aruco_params.adaptiveThreshWinSizeStep = 20 
+    
     detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
 
     half_size = marker_size / 2.0
@@ -110,22 +108,30 @@ def main():
 
     while True:
         cv_image_raw = cap.read()
-        if cv_image_raw is None: continue
+        
+        # Bandera de FPS: descansa CPU si no hay frame nuevo
+        if cv_image_raw is None: 
+            time.sleep(0.005)
+            continue
 
-        cam_view = cv2.remap(cv_image_raw, map1, map2, interpolation=cv2.INTER_LINEAR)
+        # Convertir a grises directamente (sin remap)
+        gray = cv2.cvtColor(cv_image_raw, cv2.COLOR_BGR2GRAY)
+        cam_view = cv_image_raw.copy()
+        
         minimapa = np.zeros((400, 400, 3), dtype=np.uint8)
         
         for i in range(0, 400, 50):
             cv2.line(minimapa, (i, 0), (i, 400), (30, 30, 30), 1)
             cv2.line(minimapa, (0, i), (400, i), (30, 30, 30), 1)
 
-        gray = cv2.cvtColor(cam_view, cv2.COLOR_BGR2GRAY)
+        # Detectar ArUcos
         corners, ids, _ = detector.detectMarkers(gray)
 
         if ids is not None:
             for i in range(len(ids)):
                 m_id = int(ids[i][0])
-                success, rvec, tvec = cv2.solvePnP(obj_points, corners[i][0], camera_matrix, zero_dist, flags=cv2.SOLVEPNP_IPPE_SQUARE)
+                # Pasamos dist_coeffs directamente aquí para que ArUco maneje su propia distorsión
+                success, rvec, tvec = cv2.solvePnP(obj_points, corners[i][0], camera_matrix, dist_coeffs, flags=cv2.SOLVEPNP_IPPE_SQUARE)
                 if success:
                     cx, cy = int(np.mean(corners[i][0][:, 0])), int(np.mean(corners[i][0][:, 1]))
                     memoria_tags[m_id] = {'m_x': tvec[0][0], 'm_y': tvec[1][0], 'm_z': tvec[2][0], 'c_x': cx, 'c_y': cy, 'rvec': rvec, 'tvec': tvec}
@@ -165,22 +171,16 @@ def main():
             rx, ry = memoria_tags[0]['m_x'], memoria_tags[0]['m_y']
             rvec, tvec = memoria_tags[0]['rvec'], memoria_tags[0]['tvec']
             
-            # Matriz de Rotación
             R, _ = cv2.Rodrigues(rvec)
             
-            # Orientación visual (Frente del tag)
             vector_frente_cam = R @ np.array([[0.0], [-0.15], [0.0]])
             fx, fy = rx + vector_frente_cam[0][0], ry + vector_frente_cam[1][0]
             robot_yaw_visual = math.atan2(vector_frente_cam[1][0], vector_frente_cam[0][0])
             
-            # -----------------------------------------------------------------
-            # CÁLCULO DEL CENTRO REAL DEL CARRO (Eje de tracción)
-            # -----------------------------------------------------------------
             vector_offset = R @ np.array([[OFFSET_X_TAG], [OFFSET_Y_TAG], [0.0]])
             centro_carro_x = rx + vector_offset[0][0]
             centro_carro_y = ry + vector_offset[1][0]
 
-            # Gráficos base
             p_centro_radar = metros_a_pixeles_radar(centro_carro_x, centro_carro_y)
             p_frente_radar = metros_a_pixeles_radar(fx, fy)
             cv2.arrowedLine(minimapa, p_centro_radar, p_frente_radar, (0, 0, 255), 2, tipLength=0.3)
@@ -190,9 +190,6 @@ def main():
             for i in range(1, len(estela_robot)):
                 cv2.line(minimapa, estela_robot[i-1], estela_robot[i], (0, 100, 255), int(np.interp(i, [0, len(estela_robot)], [1, 3])))
 
-            # -----------------------------------------------------------------
-            # ZANAHORIA MÓVIL SOBRE LA TRAYECTORIA
-            # -----------------------------------------------------------------
             if mision_activa and len(ruta_pts_global) == 4 and posicion_home is not None:
                 origen_linea = None
                 if estado_mision == 1: 
@@ -212,7 +209,6 @@ def main():
                     tx_fin, ty_fin, _ = objetivo_actual
                     ox, oy, _ = origen_linea
                     
-                    # Distancia real a la meta final del tramo
                     dist_meta_real = math.hypot(tx_fin - centro_carro_x, ty_fin - centro_carro_y)
                     
                     if dist_meta_real <= TOLERANCIA_LLEGADA_M:
@@ -220,22 +216,18 @@ def main():
                         estado_mision += 1
                         if estado_mision > 4: mision_activa = False
                     else:
-                        # 1. Trazar la línea ideal
                         L_linea = math.hypot(tx_fin - ox, ty_fin - oy)
                         if L_linea == 0: L_linea = 0.001
                         
                         ux, uy = (tx_fin - ox) / L_linea, (ty_fin - oy) / L_linea
                         
-                        # 2. Proyectar posición del carro en la línea ideal
                         vx, vy = centro_carro_x - ox, centro_carro_y - oy
                         proyeccion = (vx * ux) + (vy * uy)
                         
-                        # 3. Poner la zanahoria hacia adelante, pero sin pasarse de la esquina
                         distancia_virtual = min(proyeccion + LOOKAHEAD_FIJO, L_linea)
                         tx_zanahoria = ox + (distancia_virtual * ux)
                         ty_zanahoria = oy + (distancia_virtual * uy)
                         
-                        # 4. Calcular el Pure Pursuit hacia la ZANAHORIA
                         dx_meta = tx_zanahoria - centro_carro_x
                         dy_meta = ty_zanahoria - centro_carro_y
                         dist_zanahoria = math.hypot(dx_meta, dy_meta)
@@ -244,38 +236,36 @@ def main():
                         alpha = angulo_hacia_meta - robot_yaw_visual
                         alpha = (alpha + math.pi) % (2 * math.pi) - math.pi
                         
-                        v_lineal = 0.15 # Velocidad en m/s
+                        v_lineal = 0.2 
                         ld_seguro = max(dist_zanahoria, 0.1) 
                         omega_ref = (2.0 * v_lineal * math.sin(alpha)) / ld_seguro
                         
-                        MAX_OMEGA = 1.5 
+                        MAX_OMEGA = 1.2 
                         omega_ref = max(-MAX_OMEGA, min(MAX_OMEGA, omega_ref))
                         
-                        # Dibujar la zanahoria (Punto a seguir)
                         pt_zanahoria_radar = metros_a_pixeles_radar(tx_zanahoria, ty_zanahoria)
                         cv2.circle(minimapa, pt_zanahoria_radar, 5, (255, 150, 0), -1)
 
-                    # Enviar por UDP (Mandamos dist_meta_real para que la Raspberry sepa cuándo parar)
                     mensaje_red = f"{v_lineal:.3f},{omega_ref:.3f},{dist_meta_real:.3f},{estado_mision}"
                     sock_udp.sendto(mensaje_red.encode('utf-8'), (IP_RASPBERRY, PUERTO_UDP))
 
-                    # Dibujar línea y meta
                     pt_obj_radar = metros_a_pixeles_radar(tx_fin, ty_fin)
                     cv2.line(minimapa, p_centro_radar, pt_obj_radar, (255, 0, 255), 2) 
                     cv2.circle(minimapa, pt_obj_radar, int(TOLERANCIA_LLEGADA_M * ESCALA_RADAR), (0, 255, 100), 1)
                     
-                    # Textos en pantalla
                     cv2.putText(minimapa, f"Target: {nombre_objetivo}", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
                     cv2.putText(cam_view, f"V: {v_lineal:.2f} m/s", (30, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                     cv2.putText(cam_view, f"W: {omega_ref:+.2f} rad/s", (30, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
+        # Limitar la inserción del minimapa para que no se salga de la ventana de 640x480
         cv2.rectangle(minimapa, (0, 0), (399, 399), (255, 255, 255), 2)
-        cam_view[20:420, 1280-420:1280-20] = minimapa
+        cam_view[20:420, 640-420:640-20] = minimapa  
 
         texto_estado = "MISION ACTIVA" if mision_activa else "ESPERANDO ('s' para Iniciar)"
         color_estado = (0, 255, 0) if mision_activa else (0, 0, 255)
         cv2.putText(cam_view, texto_estado, (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, color_estado, 3)
-        cv2.imshow("Dashboard Pickasso", cv2.resize(cam_view, (960, 540)))
+        
+        cv2.imshow("Dashboard Pickasso", cam_view)
         
         tecla = cv2.waitKey(1) & 0xFF
         if tecla == ord('q'): break

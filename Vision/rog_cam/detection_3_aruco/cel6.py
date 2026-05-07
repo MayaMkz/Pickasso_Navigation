@@ -13,7 +13,6 @@ from collections import deque
 class CamaraIP_UltraRapida:
     def __init__(self, url):
         self.stream = cv2.VideoCapture(url)
-        # Forzamos un buffer minúsculo para evitar retrasos
         self.stream.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         
         if not self.stream.isOpened():
@@ -26,7 +25,6 @@ class CamaraIP_UltraRapida:
         print(f"[*] Conectando a stream de video en: {self.stream.getBackendName()}")
         threading.Thread(target=self.update, daemon=True).start()
         
-        # Esperamos el primer frame para arrancar con seguridad
         while self.frame_fresco is None and not self.stopped:
             time.sleep(0.1)
         print("[OK] Video recibido y escalado a 640x480.")
@@ -34,22 +32,16 @@ class CamaraIP_UltraRapida:
 
     def update(self):
         while not self.stopped:
-            # .grab() jala el frame de la red rapidísimo sin decodificar la imagen
-            # Esto vacía el buffer acumulado y mata el lag
             grabbed = self.stream.grab()
             if grabbed:
-                # .retrieve() convierte esos datos en una imagen real
                 _, img_raw = self.stream.retrieve()
-                
-                # ---> ¡AQUÍ RESCATAMOS TU CALIBRACIÓN! <---
-                # Aplastamos la imagen a 640x480 al instante
                 self.frame_fresco = cv2.resize(img_raw, (640, 480))
             else:
                 self.stop()
 
     def read(self):
         f = self.frame_fresco
-        self.frame_fresco = None  # Lo borramos para obligar al programa a esperar uno nuevo
+        self.frame_fresco = None  
         return f
 
     def stop(self):
@@ -80,8 +72,11 @@ def main():
     sock_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     marker_size = 0.063  
-    ESCALA_RADAR = 150  
-    CENTRO_RADAR = (200, 200)  
+    
+    # --- AJUSTES DEL NUEVO RADAR (480x480 píxeles) ---
+    ESCALA_RADAR = 120           # 120 pixeles = 1 metro (da mejor vista general)
+    CENTRO_RADAR = (240, 240)    # El centro exacto del nuevo cuadrado de 480x480
+    
     estela_robot = deque(maxlen=60)  
     memoria_tags = {} 
     
@@ -108,7 +103,6 @@ def main():
     aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
     aruco_params = cv2.aruco.DetectorParameters()
     
-    # OPTIMIZACIÓN: Búsqueda rápida de tags
     aruco_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_NONE
     aruco_params.adaptiveThreshWinSizeStep = 20 
     
@@ -126,28 +120,25 @@ def main():
     while True:
         cv_image_raw = cap.read()
         
-        # Sincronizador de FPS: Descansa el CPU hasta que el hilo descargue la nueva foto
         if cv_image_raw is None: 
             time.sleep(0.005)
             continue
 
-        # Procesamiento en gris para velocidad máxima
         gray = cv2.cvtColor(cv_image_raw, cv2.COLOR_BGR2GRAY)
         cam_view = cv_image_raw.copy()
         
-        minimapa = np.zeros((400, 400, 3), dtype=np.uint8)
+        # --- CREAR MINIMAPA DEL TAMAÑO DE LA ALTURA DE LA CÁMARA (480x480) ---
+        minimapa = np.zeros((480, 480, 3), dtype=np.uint8)
         
-        for i in range(0, 400, 50):
-            cv2.line(minimapa, (i, 0), (i, 400), (30, 30, 30), 1)
-            cv2.line(minimapa, (0, i), (400, i), (30, 30, 30), 1)
+        for i in range(0, 480, 50):
+            cv2.line(minimapa, (i, 0), (i, 480), (30, 30, 30), 1)
+            cv2.line(minimapa, (0, i), (480, i), (30, 30, 30), 1)
 
-        # Buscar tags en la imagen en blanco y negro cruda
         corners, ids, _ = detector.detectMarkers(gray)
 
         if ids is not None:
             for i in range(len(ids)):
                 m_id = int(ids[i][0])
-                # Aplicamos la distorsión original directo aquí
                 success, rvec, tvec = cv2.solvePnP(obj_points, corners[i][0], camera_matrix, dist_coeffs, flags=cv2.SOLVEPNP_IPPE_SQUARE)
                 if success:
                     cx, cy = int(np.mean(corners[i][0][:, 0])), int(np.mean(corners[i][0][:, 1]))
@@ -156,9 +147,6 @@ def main():
                     color = (0, 165, 255) if m_id == 0 else (0, 255, 0)
                     cv2.putText(cam_view, f"Tag {m_id}" if m_id!=0 else "Robot", (cx-40, cy-40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
-        # =========================================================
-        # GEOMETRÍA DEL RECTÁNGULO
-        # =========================================================
         if 1 in memoria_tags and 2 in memoria_tags:
             t1x, t1y, t1z = memoria_tags[1]['m_x'], memoria_tags[1]['m_y'], memoria_tags[1]['m_z']
             t2x, t2y, t2z = memoria_tags[2]['m_x'], memoria_tags[2]['m_y'], memoria_tags[2]['m_z']
@@ -181,9 +169,6 @@ def main():
             pts_radar_ruta = np.array([metros_a_pixeles_radar(p[0], p[1]) for p in ruta_pts_global], np.int32).reshape((-1, 1, 2))
             cv2.polylines(minimapa, [pts_radar_ruta], isClosed=True, color=(0, 255, 0), thickness=2)
 
-        # =========================================================
-        # NAVEGACIÓN PURE PURSUIT Y ZANAHORIA MÓVIL
-        # =========================================================
         if 0 in memoria_tags:
             rx, ry = memoria_tags[0]['m_x'], memoria_tags[0]['m_y']
             rvec, tvec = memoria_tags[0]['rvec'], memoria_tags[0]['tvec']
@@ -274,18 +259,18 @@ def main():
                     cv2.putText(cam_view, f"V: {v_lineal:.2f} m/s", (30, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                     cv2.putText(cam_view, f"W: {omega_ref:+.2f} rad/s", (30, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
-        # Pintamos el minimapa en la esquina de la imagen de 640x480
-        cv2.rectangle(minimapa, (0, 0), (399, 399), (255, 255, 255), 2)
-        try:
-            cam_view[20:420, 640-420:640-20] = minimapa  
-        except:
-            pass 
-
+        cv2.rectangle(minimapa, (0, 0), (479, 479), (255, 255, 255), 2)
+        
         texto_estado = "MISION ACTIVA" if mision_activa else "ESPERANDO ('s' para Iniciar)"
         color_estado = (0, 255, 0) if mision_activa else (0, 0, 255)
         cv2.putText(cam_view, texto_estado, (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, color_estado, 3)
+
+        # --- EL TRUCO DEL PANEL DOBLE ---
+        # Unimos la vista de la cámara (640px) y el minimapa (480px) de forma horizontal
+        # Resultado: Una sola ventana ancha y limpia de 1120x480 píxeles.
+        dashboard_final = np.hstack((cam_view, minimapa))
         
-        cv2.imshow("Dashboard Pickasso", cam_view)
+        cv2.imshow("Dashboard Pickasso", dashboard_final)
         
         tecla = cv2.waitKey(1) & 0xFF
         if tecla == ord('q'): break

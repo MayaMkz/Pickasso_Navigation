@@ -137,7 +137,7 @@ def main():
     # V_LINEAL : velocidad de crucero (m/s).
     #   Sube una vez que el control sea estable.
     #   Rango útil: 0.08 – 0.25 m/s
-    V_LINEAL = 0.15   # m/s
+    V_LINEAL = 0.08   # m/s
 
     # V_APROX_FACTOR : fracción de V_LINEAL al acercarse al waypoint.
     V_APROX_FACTOR = 0.60   # sin unidades  (0.5 = 50% de velocidad)

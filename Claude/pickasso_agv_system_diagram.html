@@ -1,0 +1,353 @@
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans)}
+.tabs{display:flex;gap:6px;margin-bottom:18px;border-bottom:0.5px solid var(--color-border-tertiary);padding-bottom:10px}
+.tab{padding:5px 14px;border-radius:var(--border-radius-md);border:0.5px solid transparent;font-size:13px;cursor:pointer;color:var(--color-text-secondary);background:transparent;transition:all .15s}
+.tab.on{background:var(--color-background-secondary);border-color:var(--color-border-secondary);color:var(--color-text-primary);font-weight:500}
+.pane{display:none}.pane.on{display:block}
+
+/* tuning table */
+.tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+.tbl th{text-align:left;padding:6px 10px;color:var(--color-text-secondary);font-weight:500;border-bottom:0.5px solid var(--color-border-tertiary)}
+.tbl td{padding:7px 10px;border-bottom:0.5px solid var(--color-border-tertiary);vertical-align:top}
+.tbl tr:last-child td{border-bottom:none}
+.tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:4px;font-weight:500;white-space:nowrap}
+.tag-h{background:var(--color-background-danger);color:var(--color-text-danger);border:0.5px solid var(--color-border-danger)}
+.tag-m{background:var(--color-background-warning);color:var(--color-text-warning);border:0.5px solid var(--color-border-warning)}
+.tag-l{background:var(--color-background-success);color:var(--color-text-success);border:0.5px solid var(--color-border-success)}
+.param{font-family:var(--font-mono);font-size:11.5px;color:var(--color-text-primary)}
+.effect-up{color:var(--color-text-danger);font-size:11px}
+.effect-dn{color:var(--color-text-success);font-size:11px}
+.section-hdr{font-size:11px;font-weight:500;color:var(--color-text-tertiary);padding:10px 10px 4px;letter-spacing:.05em;text-transform:uppercase}
+</style>
+
+<div class="tabs">
+  <button class="tab on"  onclick="sw(0)">Flujo de datos</button>
+  <button class="tab"     onclick="sw(1)">Arquitectura de threads</button>
+  <button class="tab"     onclick="sw(2)">Guía de sintonización</button>
+</div>
+
+<!-- ═══════════════ PANE 0: DATA FLOW ═══════════════ -->
+<div class="pane on" id="p0">
+<svg width="100%" viewBox="0 0 680 480" role="img">
+<title>Flujo de datos entre PC y Raspberry Pi en Pickasso AGV</title>
+<desc>La PC captura la cámara, calcula Pure Pursuit y envía (v,omega,dist,estado) por UDP al Raspberry Pi, que ejecuta el control de motores y el IMU.</desc>
+<defs>
+  <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </marker>
+</defs>
+
+<!-- PC box -->
+<g class="c-blue">
+  <rect x="30" y="30" width="260" height="380" rx="12" stroke-width="0.5"/>
+  <text class="th" x="160" y="58" text-anchor="middle" dominant-baseline="central">PC (DroidCam + Python)</text>
+</g>
+
+<!-- PC internals -->
+<g class="c-gray">
+  <rect x="48" y="76" width="224" height="48" rx="8" stroke-width="0.5"/>
+  <text class="th"  x="160" y="96"  text-anchor="middle" dominant-baseline="central">Cámara 640×480</text>
+  <text class="ts"  x="160" y="112" text-anchor="middle" dominant-baseline="central">grab/retrieve sin lag</text>
+</g>
+<line x1="160" y1="124" x2="160" y2="140" stroke="var(--color-border-secondary)" stroke-width="1" marker-end="url(#a)"/>
+<g class="c-gray">
+  <rect x="48" y="140" width="224" height="48" rx="8" stroke-width="0.5"/>
+  <text class="th"  x="160" y="160" text-anchor="middle" dominant-baseline="central">ArUco solvePnP</text>
+  <text class="ts"  x="160" y="176" text-anchor="middle" dominant-baseline="central">pose tag + offset centroide</text>
+</g>
+<line x1="160" y1="188" x2="160" y2="204" stroke="var(--color-border-secondary)" stroke-width="1" marker-end="url(#a)"/>
+<g class="c-gray">
+  <rect x="48" y="204" width="224" height="48" rx="8" stroke-width="0.5"/>
+  <text class="th"  x="160" y="224" text-anchor="middle" dominant-baseline="central">Rectángulo + offset mesa</text>
+  <text class="ts"  x="160" y="240" text-anchor="middle" dominant-baseline="central">projectPoints → imagen real</text>
+</g>
+<line x1="160" y1="252" x2="160" y2="268" stroke="var(--color-border-secondary)" stroke-width="1" marker-end="url(#a)"/>
+<g class="c-amber">
+  <rect x="48" y="268" width="224" height="60" rx="8" stroke-width="0.5"/>
+  <text class="th" x="160" y="290" text-anchor="middle" dominant-baseline="central">Pure Pursuit</text>
+  <text class="ts" x="160" y="308" text-anchor="middle" dominant-baseline="central">zanahoria → alpha → (v, ω)</text>
+</g>
+<line x1="160" y1="328" x2="160" y2="344" stroke="var(--color-border-secondary)" stroke-width="1" marker-end="url(#a)"/>
+<g class="c-gray">
+  <rect x="48" y="344" width="224" height="48" rx="8" stroke-width="0.5"/>
+  <text class="th"  x="160" y="364" text-anchor="middle" dominant-baseline="central">UDP send → Raspberry</text>
+  <text class="ts"  x="160" y="380" text-anchor="middle" dominant-baseline="central">puerto 5005, ~15-30 Hz</text>
+</g>
+
+<!-- UDP packet label (center) -->
+<rect x="268" y="182" width="144" height="96" rx="10" fill="var(--color-background-secondary)" stroke="var(--color-border-secondary)" stroke-width="0.5" stroke-dasharray="4 3"/>
+<text class="ts" x="340" y="204" text-anchor="middle" style="fill:var(--color-text-secondary)">Paquete UDP</text>
+<text class="ts" x="340" y="222" text-anchor="middle" style="font-family:var(--font-mono);fill:var(--color-text-primary)">"v, ω, dist, estado"</text>
+<text class="ts" x="340" y="240" text-anchor="middle" style="fill:var(--color-text-tertiary)">v      → m/s lineal</text>
+<text class="ts" x="340" y="256" text-anchor="middle" style="fill:var(--color-text-tertiary)">ω      → rad/s angular</text>
+<text class="ts" x="340" y="272" text-anchor="middle" style="fill:var(--color-text-tertiary)">dist   → m al waypoint</text>
+
+<!-- arrows UDP -->
+<line x1="272" y1="368" x2="220" y2="368" stroke="var(--color-border-secondary)" stroke-width="1.5" marker-end="url(#a)"/>
+<line x1="410" y1="230" x2="390" y2="230" stroke="var(--color-border-secondary)" stroke-width="1.5" marker-end="url(#a)"/>
+
+<!-- Raspberry box -->
+<g class="c-teal">
+  <rect x="390" y="30" width="260" height="380" rx="12" stroke-width="0.5"/>
+  <text class="th" x="520" y="58" text-anchor="middle" dominant-baseline="central">Raspberry Pi (Python)</text>
+</g>
+
+<!-- Rasp internals -->
+<g class="c-gray">
+  <rect x="408" y="76" width="224" height="48" rx="8" stroke-width="0.5"/>
+  <text class="th" x="520" y="96"  text-anchor="middle" dominant-baseline="central">Thread UDP (200 Hz)</text>
+  <text class="ts" x="520" y="112" text-anchor="middle" dominant-baseline="central">drena buffer → paquete fresco</text>
+</g>
+<line x1="520" y1="124" x2="520" y2="140" stroke="var(--color-border-secondary)" stroke-width="1" marker-end="url(#a)"/>
+<g class="c-gray">
+  <rect x="408" y="140" width="224" height="48" rx="8" stroke-width="0.5"/>
+  <text class="th" x="520" y="160" text-anchor="middle" dominant-baseline="central">Thread CTRL (100 Hz)</text>
+  <text class="ts" x="520" y="176" text-anchor="middle" dominant-baseline="central">(v,ω) + IMU → RPM_L / RPM_R</text>
+</g>
+<line x1="520" y1="188" x2="520" y2="204" stroke="var(--color-border-secondary)" stroke-width="1" marker-end="url(#a)"/>
+<g class="c-gray">
+  <rect x="408" y="204" width="224" height="48" rx="8" stroke-width="0.5"/>
+  <text class="th" x="520" y="224" text-anchor="middle" dominant-baseline="central">ESP32 × 2 (serial)</text>
+  <text class="ts" x="520" y="240" text-anchor="middle" dominant-baseline="central">PWM → 4 motores DC</text>
+</g>
+<line x1="520" y1="252" x2="520" y2="268" stroke="var(--color-border-secondary)" stroke-width="1" marker-end="url(#a)"/>
+<g class="c-gray">
+  <rect x="408" y="268" width="224" height="48" rx="8" stroke-width="0.5"/>
+  <text class="th" x="520" y="288" text-anchor="middle" dominant-baseline="central">Encoders (20 000 PPR)</text>
+  <text class="ts" x="520" y="304" text-anchor="middle" dominant-baseline="central">diagnóstico + velocidad real</text>
+</g>
+<line x1="520" y1="316" x2="520" y2="332" stroke="var(--color-border-secondary)" stroke-width="1" marker-end="url(#a)"/>
+<g class="c-amber">
+  <rect x="408" y="332" width="224" height="60" rx="8" stroke-width="0.5"/>
+  <text class="th" x="520" y="354" text-anchor="middle" dominant-baseline="central">Main thread (misión)</text>
+  <text class="ts" x="520" y="372" text-anchor="middle" dominant-baseline="central">vigila estado → giros y esperas</text>
+</g>
+
+<!-- IMU entry from side -->
+<rect x="408" y="148" width="0" height="0"/>
+<line x1="380" y1="164" x2="406" y2="164" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#a)"/>
+<text class="ts" x="372" y="160" text-anchor="end" style="fill:#0F6E56">IMU</text>
+<text class="ts" x="372" y="174" text-anchor="end" style="fill:#0F6E56">BNO055</text>
+
+<!-- estado feedback note -->
+<line x1="408" y1="362" x2="290" y2="420" stroke="var(--color-border-secondary)" stroke-width="0.8" stroke-dasharray="4 3" marker-end="url(#a)"/>
+<text class="ts" x="320" y="435" text-anchor="middle" style="fill:var(--color-text-tertiary)">PC incrementa estado al capturar waypoint</text>
+</svg>
+</div>
+
+<!-- ═══════════════ PANE 1: THREAD ARCH ═══════════════ -->
+<div class="pane" id="p1">
+<svg width="100%" viewBox="0 0 680 430" role="img">
+<title>Arquitectura de 3 threads en el Raspberry Pi de Pickasso AGV</title>
+<desc>Thread UDP recibe datos de visión, Thread CTRL corre a 100Hz con el IMU, Main thread detecta esquinas y ejecuta maniobras.</desc>
+<defs>
+  <marker id="b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </marker>
+</defs>
+
+<!-- Thread A -->
+<g class="c-blue">
+  <rect x="30" y="30" width="180" height="180" rx="10" stroke-width="0.5"/>
+  <text class="th" x="120" y="56" text-anchor="middle" dominant-baseline="central">Thread UDP</text>
+  <text class="ts" x="120" y="72" text-anchor="middle" dominant-baseline="central">200 Hz efectivo</text>
+</g>
+<g class="c-gray">
+  <rect x="46" y="88" width="148" height="36" rx="6" stroke-width="0.5"/>
+  <text class="ts" x="120" y="106" text-anchor="middle" dominant-baseline="central">recibe UDP :5005</text>
+</g>
+<g class="c-gray">
+  <rect x="46" y="134" width="148" height="36" rx="6" stroke-width="0.5"/>
+  <text class="ts" x="120" y="148" text-anchor="middle" dominant-baseline="central">drena buffer completo</text>
+  <text class="ts" x="120" y="162" text-anchor="middle" dominant-baseline="central">→ paquete más reciente</text>
+</g>
+<g class="c-gray">
+  <rect x="46" y="180" width="148" height="22" rx="4" stroke-width="0.5"/>
+  <text class="ts" x="120" y="191" text-anchor="middle" dominant-baseline="central">nuevo_dato_event.set()</text>
+</g>
+
+<!-- Thread B -->
+<g class="c-teal">
+  <rect x="250" y="30" width="180" height="250" rx="10" stroke-width="0.5"/>
+  <text class="th" x="340" y="56" text-anchor="middle" dominant-baseline="central">Thread CTRL</text>
+  <text class="ts" x="340" y="72" text-anchor="middle" dominant-baseline="central">100 Hz fijo</text>
+</g>
+<g class="c-gray">
+  <rect x="266" y="88" width="148" height="36" rx="6" stroke-width="0.5"/>
+  <text class="ts" x="340" y="106" text-anchor="middle" dominant-baseline="central">lee (v, ω) del cmd_lock</text>
+</g>
+<g class="c-gray">
+  <rect x="266" y="134" width="148" height="36" rx="6" stroke-width="0.5"/>
+  <text class="ts" x="340" y="148" text-anchor="middle" dominant-baseline="central">lee IMU BNO055</text>
+  <text class="ts" x="340" y="162" text-anchor="middle" dominant-baseline="central">filtra saltos > 10°</text>
+</g>
+<g class="c-gray">
+  <rect x="266" y="180" width="148" height="36" rx="6" stroke-width="0.5"/>
+  <text class="ts" x="340" y="198" text-anchor="middle" dominant-baseline="central">integra ω → yaw_ref</text>
+  <text class="ts" x="340" y="214" text-anchor="middle" dominant-baseline="central">error → corrección IMU</text>
+</g>
+<g class="c-amber">
+  <rect x="266" y="226" width="148" height="44" rx="6" stroke-width="0.5"/>
+  <text class="ts" x="340" y="244" text-anchor="middle" dominant-baseline="central">v_izq = v − ω·L/2</text>
+  <text class="ts" x="340" y="260" text-anchor="middle" dominant-baseline="central">v_der = v + ω·L/2 → RPM</text>
+</g>
+
+<!-- Thread Main -->
+<g class="c-coral">
+  <rect x="470" y="30" width="180" height="250" rx="10" stroke-width="0.5"/>
+  <text class="th" x="560" y="56" text-anchor="middle" dominant-baseline="central">Main thread</text>
+  <text class="ts" x="560" y="72" text-anchor="middle" dominant-baseline="central">ritmo de visión ~30 Hz</text>
+</g>
+<g class="c-gray">
+  <rect x="486" y="88" width="148" height="36" rx="6" stroke-width="0.5"/>
+  <text class="ts" x="560" y="106" text-anchor="middle" dominant-baseline="central">wait(nuevo_dato_event)</text>
+  <text class="ts" x="560" y="120" text-anchor="middle" dominant-baseline="central">timeout 100 ms</text>
+</g>
+<g class="c-gray">
+  <rect x="486" y="134" width="148" height="36" rx="6" stroke-width="0.5"/>
+  <text class="ts" x="560" y="152" text-anchor="middle" dominant-baseline="central">vigila estado_mision</text>
+</g>
+<g class="c-gray">
+  <rect x="486" y="180" width="148" height="36" rx="6" stroke-width="0.5"/>
+  <text class="ts" x="560" y="194" text-anchor="middle" dominant-baseline="central">transición detectada →</text>
+  <text class="ts" x="560" y="208" text-anchor="middle" dominant-baseline="central">pausa CTRL</text>
+</g>
+<g class="c-amber">
+  <rect x="486" y="226" width="148" height="44" rx="6" stroke-width="0.5"/>
+  <text class="ts" x="560" y="240" text-anchor="middle" dominant-baseline="central">estación: espera 10 s</text>
+  <text class="ts" x="560" y="256" text-anchor="middle" dominant-baseline="central">girar 90° → reanuda CTRL</text>
+</g>
+
+<!-- Shared state box -->
+<rect x="120" y="320" width="440" height="70" rx="10" fill="var(--color-background-secondary)" stroke="var(--color-border-secondary)" stroke-width="0.5"/>
+<text class="ts" x="340" y="342" text-anchor="middle" style="font-weight:500">Estado compartido (locks)</text>
+<text class="ts" x="200" y="364" text-anchor="middle" style="fill:var(--color-text-secondary)">vision_lock → datos_vision{}</text>
+<text class="ts" x="340" y="364" text-anchor="middle" style="fill:var(--color-text-secondary)">cmd_lock → {v, ω}</text>
+<text class="ts" x="480" y="364" text-anchor="middle" style="fill:var(--color-text-secondary)">ctrl_activo Event</text>
+<text class="ts" x="340" y="382" text-anchor="middle" style="fill:var(--color-text-tertiary)">nuevo_dato_event (bloquea main hasta que llega dato)</text>
+
+<!-- arrows: A→shared, B→shared, Main→shared -->
+<line x1="120" y1="210" x2="200" y2="320" stroke="var(--color-border-secondary)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#b)"/>
+<line x1="340" y1="280" x2="340" y2="320" stroke="var(--color-border-secondary)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#b)"/>
+<line x1="560" y1="280" x2="480" y2="320" stroke="var(--color-border-secondary)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#b)"/>
+
+<!-- motors arrow from CTRL -->
+<line x1="414" y1="248" x2="460" y2="248" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#b)"/>
+<text class="ts" x="436" y="242" text-anchor="middle" style="fill:#0F6E56">RPM</text>
+<rect x="460" y="228" width="2" height="40" fill="var(--color-border-secondary)"/>
+</svg>
+</div>
+
+<!-- ═══════════════ PANE 2: TUNING ═══════════════ -->
+<div class="pane" id="p2">
+
+<div class="section-hdr">Archivo: cel7.py (PC)</div>
+<table class="tbl">
+<tr>
+  <th>Parámetro</th><th>Valor inicial</th><th>Impacto</th><th>Síntoma si está mal</th>
+</tr>
+<tr>
+  <td><span class="param">OFFSET_X_TAG</span><br><span class="tag tag-h">Medir primero</span></td>
+  <td>0.00 m</td>
+  <td>Desplaza lateralmente el centroide calculado respecto al tag ArUco</td>
+  <td>El carro camina paralelo a la ruta pero desviado a un lado</td>
+</tr>
+<tr>
+  <td><span class="param">OFFSET_Y_TAG</span><br><span class="tag tag-h">Medir primero</span></td>
+  <td>0.15 m</td>
+  <td>Desplaza longitudinalmente el centroide. +Y = tag está detrás del centroide</td>
+  <td>El carro frena o gira antes/después de donde debe</td>
+</tr>
+<tr>
+  <td><span class="param">OFFSET_MESA_M</span><br><span class="tag tag-m">Ajustar una vez</span></td>
+  <td>0.40 m</td>
+  <td>Expansión del rectángulo virtual. Debe ser ≥ ancho_chasis/2 + 0.10</td>
+  <td>Muy pequeño: llanta roza la mesa. Muy grande: desperdicia espacio</td>
+</tr>
+<tr>
+  <td><span class="param">LOOKAHEAD_FIJO</span><br><span class="tag tag-m">Sintonización</span></td>
+  <td>0.20 m</td>
+  <td><span class="effect-up">↑ Grande</span> = curvas suaves, peor en rectas cortas<br><span class="effect-dn">↓ Pequeño</span> = preciso, puede oscilar</td>
+  <td>Grande: el carro corta las esquinas. Pequeño: zigzag en recta</td>
+</tr>
+<tr>
+  <td><span class="param">V_LINEAL</span><br><span class="tag tag-l">Afinar último</span></td>
+  <td>0.15 m/s</td>
+  <td><span class="effect-up">↑</span> más rápido, menos tiempo para corregir. <span class="effect-dn">↓</span> más lento, más estable</td>
+  <td>Muy alto: se pasa de los waypoints. Muy bajo: tarda mucho</td>
+</tr>
+<tr>
+  <td><span class="param">TOLERANCIA_LLEGADA_M</span><br><span class="tag tag-l">Afinar último</span></td>
+  <td>0.05 m</td>
+  <td>Radio de captura del waypoint</td>
+  <td>Grande: gira antes de llegar. Pequeño: pasa de largo sin girar</td>
+</tr>
+<tr>
+  <td><span class="param">MAX_OMEGA</span><br><span class="tag tag-l">Afinar último</span></td>
+  <td>1.2 rad/s</td>
+  <td>Techo de velocidad angular que puede pedir Pure Pursuit</td>
+  <td>Muy alto: maniobras bruscas. Muy bajo: no alcanza a corregir curvas</td>
+</tr>
+</table>
+
+<div class="section-hdr" style="margin-top:14px">Archivo: Prueba6.py (Raspberry Pi)</div>
+<table class="tbl">
+<tr>
+  <th>Parámetro</th><th>Valor inicial</th><th>Impacto</th><th>Síntoma si está mal</th>
+</tr>
+<tr>
+  <td><span class="param">L_WHEELBASE_M</span><br><span class="tag tag-h">Medir primero</span></td>
+  <td>0.30 m</td>
+  <td>Distancia entre centros de llanta. Determina la conversión (v,ω)→RPM</td>
+  <td>Error aquí = el carro siempre va en curva aunque ω=0</td>
+</tr>
+<tr>
+  <td><span class="param">RPM_GIRO</span><br><span class="tag tag-m">Ajustar una vez</span></td>
+  <td>22 rpm</td>
+  <td>Velocidad de los giros de 90° en esquinas</td>
+  <td>Alto: inercia hace que pase los 90°. Bajo: muy lento</td>
+</tr>
+<tr>
+  <td><span class="param">K_IMU</span><br><span class="tag tag-m">Sintonización</span></td>
+  <td>0.04 rad/s/°</td>
+  <td><span class="effect-up">↑</span> recupera rápido de derrapes. <span class="effect-dn">↓</span> IMU apenas influye</td>
+  <td>Muy alto: IMU "pelea" con visión y crea oscilación. Muy bajo: el carro resbala sin corregir</td>
+</tr>
+<tr>
+  <td><span class="param">OMEGA_IMU_MAX</span><br><span class="tag tag-m">Sintonización</span></td>
+  <td>0.25 rad/s</td>
+  <td>Máxima corrección que puede agregar el IMU en un tick</td>
+  <td>Muy alto: un salto magnético puntual roba el control. Muy bajo: corrección insuficiente</td>
+</tr>
+<tr>
+  <td><span class="param">INVERTIR_IMU</span><br><span class="tag tag-l">Primera prueba</span></td>
+  <td>False</td>
+  <td>Si la corrección va al revés → True</td>
+  <td>El carro se aleja más al corregir en vez de volver a la línea</td>
+</tr>
+<tr>
+  <td><span class="param">SENTIDO_GIRO_MANUAL</span><br><span class="tag tag-l">Primera prueba</span></td>
+  <td>1 (izquierda)</td>
+  <td>Dirección de los giros en esquinas: +1=antihorario, -1=horario</td>
+  <td>El carro gira en dirección equivocada en cada esquina</td>
+</tr>
+<tr>
+  <td><span class="param">TIMEOUT_VISION_S</span><br><span class="tag tag-l">No tocar</span></td>
+  <td>1.0 s</td>
+  <td>Tiempo sin UDP antes de parada de emergencia</td>
+  <td>Muy corto: para con pérdidas momentáneas de WiFi</td>
+</tr>
+</table>
+
+<div style="margin-top:14px;padding:10px 14px;background:var(--color-background-secondary);border-radius:var(--border-radius-md);font-size:12.5px;color:var(--color-text-secondary);border:0.5px solid var(--color-border-tertiary)">
+  <strong style="color:var(--color-text-primary)">Orden de sintonización recomendado:</strong>
+  Mide OFFSET_TAG y L_WHEELBASE → ajusta OFFSET_MESA → prueba giro (RPM_GIRO) → sube V_LINEAL de a 0.02 m/s → ajusta LOOKAHEAD si zigzaguea → afina K_IMU si derrapa en piso liso.
+</div>
+</div>
+
+<script>
+var tabs=document.querySelectorAll('.tab'),panes=document.querySelectorAll('.pane');
+function sw(i){tabs.forEach(function(t,j){t.classList.toggle('on',j===i)});panes.forEach(function(p,j){p.classList.toggle('on',j===i)})}
+</script>

@@ -103,7 +103,7 @@ def main():
 
     # OFFSET_Y_TAG : desplazamiento longitudinal.
     #   + = tag está DETRÁS del centroide (en frame cenital, nariz = -Y).
-    OFFSET_Y_TAG = 0.15   # m  ← MEDIR
+    OFFSET_Y_TAG = -0.02   # m  ← MEDIR
 
     # ══════════════════════════════════════════════════════════════
     #  [TUNING B] GEOMETRÍA DE LA RUTA
@@ -112,15 +112,15 @@ def main():
     
     # OFFSET_MESA_X : expansión lateral del rectángulo (ancho de la mesa).
     #   Debe ser ≥ (ancho_carro / 2) + margen extra de seguridad.
-    OFFSET_MESA_X = 0.40   # m
+    OFFSET_MESA_X = 0.45   # m
 
     # OFFSET_MESA_Y : expansión longitudinal del rectángulo (largo de la mesa).
     #   Debe ser ≥ (largo_carro / 2) + margen extra de seguridad.
-    OFFSET_MESA_Y = 0.50   # m
+    OFFSET_MESA_Y = 0.43   # m
 
     # TOLERANCIA_LLEGADA_M : radio para capturar un waypoint.
     #   Con Mecanum puedes reducir un poco porque el carro entra lateral.
-    TOLERANCIA_LLEGADA_M = 0.06   # m
+    TOLERANCIA_LLEGADA_M = 0.05   # m
 
     # ══════════════════════════════════════════════════════════════
     #  [TUNING C] CONTROLADOR DE VELOCIDAD

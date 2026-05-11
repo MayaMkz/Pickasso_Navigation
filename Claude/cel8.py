@@ -100,18 +100,18 @@ def main():
 
     # OFFSET_Y_TAG : desplazamiento longitudinal.
     #   + = tag está DETRÁS del centroide (en frame cenital, nariz = -Y).
-    OFFSET_Y_TAG = 0.15   # m  ← MEDIR
+    OFFSET_Y_TAG = 0.00   # m  ← MEDIR
 
     # ══════════════════════════════════════════════════════════════
     #  [TUNING B] GEOMETRÍA DE LA RUTA
     # ══════════════════════════════════════════════════════════════
     # OFFSET_MESA_M : expansión del rectángulo virtual.
     #   Debe ser ≥ ancho_carro/2 + 0.10 m para que las llantas no rocen.
-    OFFSET_MESA_M = 0.40   # m
+    OFFSET_MESA_M = 0.45   # m
 
     # TOLERANCIA_LLEGADA_M : radio para capturar un waypoint.
     #   Con Mecanum puedes reducir un poco porque el carro entra lateral.
-    TOLERANCIA_LLEGADA_M = 0.06   # m
+    TOLERANCIA_LLEGADA_M = 0.05   # m
 
     # ══════════════════════════════════════════════════════════════
     #  [TUNING C] CONTROLADOR DE VELOCIDAD
@@ -168,7 +168,7 @@ def main():
     aruco_params.adaptiveThreshWinSizeStep = 10
     detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
 
-    hs         = 0.063 / 2.0
+    hs         = 0.087 / 2.0
     obj_points = np.array([[-hs, hs,0],[hs, hs,0],[hs,-hs,0],[-hs,-hs,0]], dtype=np.float32)
 
     # ── Estado ──────────────────────────────────────────────────

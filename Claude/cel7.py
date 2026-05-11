@@ -116,7 +116,7 @@ def main():
     #  [TUNING B] GEOMETRÍA DE LA RUTA
     # ══════════════════════════════════════════════════════════════
     # OFFSET_MESA_M : expansión del rectángulo alrededor de la mesa.
-    OFFSET_MESA_M = 0.40   # m
+    OFFSET_MESA_M = 0.45   # m
 
     # TOLERANCIA_LLEGADA_M : radio de captura del waypoint.
     TOLERANCIA_LLEGADA_M = 0.05   # m

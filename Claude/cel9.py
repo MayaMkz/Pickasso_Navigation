@@ -105,14 +105,14 @@ def main():
 
     ROBOT_TAGS = {
         # id : (offset_x_m,  offset_y_m)
-        0  : ( 0.00,  -0.02),   # tag frontal central  ← ajustar
-        3  : ( 0.10,   0.00),   # tag lateral derecho  ← ajustar
-        4  : ( 0.00,   0.10),   # tag trasero central  ← ajustar
-        5  : (-0.10,   0.00),   # tag lateral izquierdo ← ajustar
+        0  : ( 0.00,  -0.02),   # tag frontal izquierdo  ← ajustar
+        3  : ( 0.10,   0.00),   # tag frontal derecho  ← ajustar
+        4  : ( 0.00,   0.10),   # tag trasero izquierdo  ← ajustar
+        5  : (-0.10,   0.00),   # tag lateral derecho ← ajustar
     }
     # Orden de prioridad: si varios están visibles al mismo tiempo,
     # se usa el que aparezca primero en esta lista.
-    PRIORIDAD_TAGS = [0, 3, 4, 5]
+    PRIORIDAD_TAGS = [5, 4, 3, 0]
 
     # Tag activo en este momento (se actualiza automáticamente)
     tag_robot_activo = None

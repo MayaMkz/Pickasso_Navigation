@@ -45,14 +45,14 @@ class CamaraIP_UltraRapida:
         threading.Thread(target=self._update, daemon=True).start()
         while self.frame_fresco is None and not self.stopped:
             time.sleep(0.05)
-        print("[OK] Video 640×480 en vivo.")
+        print("[OK] Video 1280x720 en vivo.")
         return self
 
     def _update(self):
         while not self.stopped:
             if self.stream.grab():
                 _, img = self.stream.retrieve()
-                self.frame_fresco = cv2.resize(img, (640, 480))
+                self.frame_fresco = cv2.resize(img, (1280, 720))
             else:
                 self.stop()
 
@@ -105,14 +105,14 @@ def main():
 
     ROBOT_TAGS = {
         # id : (offset_x_m,  offset_y_m)
-        0  : ( 0.00,  -0.02),   # tag frontal izquierdo  ← ajustar
-        3  : ( 0.10,   0.00),   # tag frontal derecho  ← ajustar
-        4  : ( 0.00,   0.10),   # tag trasero izquierdo  ← ajustar
-        5  : (-0.10,   0.00),   # tag lateral derecho ← ajustar
+        5  : ( - 0.250,  0.140),   # tag frontal izquierdo  ← ajustar
+        4  : ( 0.250,   0.140),   # tag frontal derecho  ← ajustar
+        3  : ( -0.250,   -0.140),   # tag trasero izquierdo  ← ajustar
+        0  : (0.250,   -0.140),   # tag lateral derecho ← ajustar
     }
     # Orden de prioridad: si varios están visibles al mismo tiempo,
     # se usa el que aparezca primero en esta lista.
-    PRIORIDAD_TAGS = [5, 4, 3, 0]
+    PRIORIDAD_TAGS = [0, 3, 4, 5]
 
     # Tag activo en este momento (se actualiza automáticamente)
     tag_robot_activo = None
@@ -124,11 +124,13 @@ def main():
     
     # OFFSET_MESA_X : expansión lateral del rectángulo (ancho de la mesa).
     #   Debe ser ≥ (ancho_carro / 2) + margen extra de seguridad.
-    OFFSET_MESA_X = 0.45   # m
+    # ancho carro =0.702
+    OFFSET_MESA_X = 0.495   # m
 
     # OFFSET_MESA_Y : expansión longitudinal del rectángulo (largo de la mesa).
     #   Debe ser ≥ (largo_carro / 2) + margen extra de seguridad.
-    OFFSET_MESA_Y = 0.43   # m
+    # largo carro =0.670
+    OFFSET_MESA_Y = 0.480   # m
 
     # TOLERANCIA_LLEGADA_M : radio para capturar un waypoint.
     #   Con Mecanum puedes reducir un poco porque el carro entra lateral.
@@ -180,7 +182,7 @@ def main():
         K = np.array([[f_est,0,320],[0,f_est,240],[0,0,1]], dtype=np.float32)
         D = np.zeros((4,1))
 
-    map1, map2 = cv2.initUndistortRectifyMap(K, D, None, K, (640,480), cv2.CV_32FC1)
+    map1, map2 = cv2.initUndistortRectifyMap(K, D, None, K, (1280,720), cv2.CV_32FC1)
 
     # ── ArUco ───────────────────────────────────────────────────
     aruco_dict   = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
@@ -189,7 +191,7 @@ def main():
     aruco_params.adaptiveThreshWinSizeStep = 10
     detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
 
-    hs         = 0.063 / 2.0
+    hs         = 0.087 / 2.0
     obj_points = np.array([[-hs, hs,0],[hs, hs,0],[hs,-hs,0],[-hs,-hs,0]], dtype=np.float32)
 
     # ── Estado ──────────────────────────────────────────────────
@@ -449,7 +451,7 @@ def main():
             memoria_tags.clear(); estela_robot.clear()
             mision_activa=False; estado_mision=0; posicion_home=None
             print("[R] Reset.")
-        elif k == ord('s') and not mision_activa:
+        elif k == ord('m') and not mision_activa:
             if len(ruta_pts_global)==4 and tag_robot_activo is not None:
                 tag  = memoria_tags[tag_robot_activo]
                 off_x, off_y = ROBOT_TAGS[tag_robot_activo]

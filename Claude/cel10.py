@@ -85,7 +85,7 @@ def main():
     # Si al arrancar notas que todo el circuito está rotado unos grados
     # respecto a tu mesa física, ajusta aquí (+/- grados)
     OFFSET_HEADING_GLOBAL_DEG = 0.0
-    K_HEADING = 0.8
+    K_HEADING = 0.4
     OMEGA_HEADING_MAX = 0.5
     
     yaw_bloqueado = 0.0 

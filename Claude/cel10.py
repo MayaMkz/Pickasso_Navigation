@@ -61,7 +61,7 @@ def main():
     IP_RASPBERRY = "192.168.137.240"
     PUERTO_UDP   = 5005
 
-    TAG_TIMEOUT_S = 0.5
+    TAG_TIMEOUT_S = 1.25
 
     ROBOT_TAGS = {
         5  : ( -0.250,  0.140),

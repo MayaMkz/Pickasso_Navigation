@@ -36,6 +36,9 @@ class Vision3DNode(Node):
 
         # --- PUBLICADOR EN ROS2 ---
         self.publisher_ = self.create_publisher(Point, 'coordenadas_cubo_3d', 10)
+
+        self.nombre_ventana = "Vision 3D"
+        cv2.namedWindow(self.nombre_ventana, cv2.WINDOW_AUTOSIZE)
         
         # Timer para el ciclo principal (aprox 20 FPS)
         self.timer = self.create_timer(0.05, self.procesar_y_publicar)
@@ -112,7 +115,7 @@ class Vision3DNode(Node):
                 cv2.putText(frame, etiqueta, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
         # Mostrar la imagen en vivo en la pantalla
-        cv2.imshow("Pickasso - Visión 3D (YOLO + RealSense)", frame)
+        cv2.imshow(self.nombre_ventana, frame)
         cv2.waitKey(1)
 
 def main(args=None):

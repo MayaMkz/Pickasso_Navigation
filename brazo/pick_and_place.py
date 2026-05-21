@@ -32,12 +32,26 @@ class PickAndPlaceNode(Node):
 
         self.camara_invertida = True
 
-        # --- MATRIZ DE TRANSFORMACIÓN ---
-        self.T_cam_to_base = np.array([
-            [1.0, 0.0, 0.0,  274.506207],
-            [0.0, -1.0, 0.0, -7.3420],
-            [0.0, 0.0, -1.0,  76.101772],
-            [0.0, 0.0, 0.0,  1.0 ]   
+        # ========================================================
+        # LÓGICA DE TRANSFORMADAS HOMOGÉNEAS (EYE-IN-HAND)
+        # ========================================================
+        
+        # 1. T_brida_camara: Desfase FÍSICO FIJO de la cámara respecto al efector final.
+        # TODO: Rellenar con RoboDK (Cámara respecto a xArm5 TCP/Flange)
+        self.T_brida_camara = np.array([
+            [1.0,  0.0,  0.0,    0.0],  # Ej: Desfase en X (mm)
+            [0.0, -1.0,  0.0,    0.0],  # Ej: Desfase en Y (mm)
+            [0.0,  0.0, -1.0,   76.1],  # Ej: Desfase en Z (mm)
+            [0.0,  0.0,  0.0,    1.0]
+        ])
+
+        # 2. T_base_brida_home: Pose de la brida respecto a la base del robot en la postura de lectura.
+        # TODO: Rellenar con RoboDK (TCP respecto a Base) asegurando que el robot está en su "custom_home_joints"
+        self.T_base_brida_home = np.array([
+            [1.0, 0.0, 0.0,  274.5],  
+            [0.0, 1.0, 0.0,   -7.3],
+            [0.0, 0.0, 1.0,  450.0],  # <-- Asegúrate de que esta altura de lectura sea > 400mm
+            [0.0, 0.0, 0.0,    1.0]
         ])
 
         # --- CONFIGURACIÓN DE HOME ---
@@ -71,7 +85,6 @@ class PickAndPlaceNode(Node):
         try:
             future.result()
             self.get_logger().info("Robot habilitado y listo. Iniciando movimiento a Home...")
-            # Ahora que el robot está habilitado, lo mandamos a Home
             self.ir_a_home()
         except Exception as e:
             self.get_logger().error(f"Error al cambiar Estado: {e}")
@@ -114,14 +127,21 @@ class PickAndPlaceNode(Node):
             x_cam_mm = -x_cam_mm
             y_cam_mm = -y_cam_mm
 
-        punto_camara = np.array([x_cam_mm,y_cam_mm,z_cam_mm, 1.0])
-        punto_base = np.dot(self.T_cam_to_base, punto_camara)
+        # --- CINEMÁTICA EYE-IN-HAND ---
+        # 1. El punto respecto a la cámara
+        punto_camara = np.array([x_cam_mm, y_cam_mm, z_cam_mm, 1.0])
+        
+        # 2. Calcular matriz total: T_base_camara = T_base_brida * T_brida_camara
+        T_base_camara = np.dot(self.T_base_brida_home, self.T_brida_camara)
+        
+        # 3. Proyectar el punto del cubo a la base del robot
+        punto_base = np.dot(T_base_camara, punto_camara)
 
         x_robot = punto_base[0]
         y_robot = punto_base[1]
         
         # Z seguro de prueba (15 cm arriba del cubo)
-        z_robot = punto_base[2] + 150
+        z_robot = punto_base[2] + 150.0
 
         self.ejecutar_pick(x_robot, y_robot, z_robot)
 

@@ -139,9 +139,13 @@ class PickAndPlaceNode(Node):
 
         x_robot = punto_base[0]
         y_robot = punto_base[1]
+
+        # Compensacion del gripper
+        longitud_gripper_mm = 160.0  # TODO: Mide tu gripper real y pon el valor aquí
+        margen_seguridad_mm = 100.0  # Los 15 cm por encima del cubo para probar
         
         # Z seguro de prueba (15 cm arriba del cubo)
-        z_robot = punto_base[2] + 150.0
+        z_robot = punto_base[2] + longitud_gripper_mm + margen_seguridad_mm
 
         self.ejecutar_pick(x_robot, y_robot, z_robot)
 

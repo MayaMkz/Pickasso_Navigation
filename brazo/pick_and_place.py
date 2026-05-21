@@ -28,7 +28,9 @@ class PickAndPlaceNode(Node):
             Point, 'coordenadas_cubo_3d', self.cubo_callback, 10)
         
         # Candado de seguridad puesto al iniciar
-        self.ocupado = True 
+        self.ocupado = True
+
+        self.camara_invertida = True
 
         # --- MATRIZ DE TRANSFORMACIÓN ---
         self.T_cam_to_base = np.array([
@@ -39,7 +41,7 @@ class PickAndPlaceNode(Node):
         ])
 
         # --- CONFIGURACIÓN DE HOME ---
-        self.custom_home_joints = [0.0, -1.309, -0.349066, 0.349066, 0.0] 
+        self.custom_home_joints = [0.0, -1.309, -0.349066, 1.22173, 0.0] 
         
         # Iniciar cadena de activación del robot
         self.inicializar_robot()
@@ -81,7 +83,7 @@ class PickAndPlaceNode(Node):
         req = MoveJoint.Request()
         req.angles = self.custom_home_joints
         req.speed = 0.25  # rad/s
-        req.mvacc = 1.0   # rad/s^2
+        req.acc = 1.0   # rad/s^2
         
         future = self.cli_joint.call_async(req)
         future.add_done_callback(self.home_done_callback)
@@ -104,47 +106,58 @@ class PickAndPlaceNode(Node):
         self.get_logger().info(f"Cubo detectado -> X:{msg.x:.3f}, Y:{msg.y:.3f}, Z:{msg.z:.3f}")
         self.ocupado = True
 
-        punto_camara = np.array([msg.x, msg.y, msg.z, 1.0])
+        x_cam_mm = msg.x * 1000.0
+        y_cam_mm = msg.y * 1000.0
+        z_cam_mm = msg.z * 1000.0
+
+        if self.camara_invertida:
+            x_cam_mm = -x_cam_mm
+            y_cam_mm = -y_cam_mm
+
+        punto_camara = np.array([x_cam_mm,y_cam_mm,z_cam_mm, 1.0])
         punto_base = np.dot(self.T_cam_to_base, punto_camara)
 
         x_robot = punto_base[0]
         y_robot = punto_base[1]
         
         # Z seguro de prueba (15 cm arriba del cubo)
-        z_robot = punto_base[2] + 0.3
+        z_robot = punto_base[2] + 150
 
         self.ejecutar_pick(x_robot, y_robot, z_robot)
 
     # ==========================================
     # LÓGICA DE MOVIMIENTO CARTESIANO (PICK)
     # ==========================================
-    def ejecutar_pick(self, x, y, z):
+    def ejecutar_pick(self, x_mm, y_mm, z_mm):
         req = MoveCartesian.Request()
-        
-        x_mm = float(x * 1000.0)
-        y_mm = float(y * 1000.0)
-        z_mm = float(z * 1000.0)
         
         # Orientación Opción A para brazo de 5GDL
         roll = 3.14159  
         pitch = 0.0
         yaw = 0.0
         
-        req.pose = [x_mm, y_mm, z_mm, roll, pitch, yaw]
-        req.speed = 100.0  
-        req.mvacc = 1000.0 
+        req.pose = [float(x_mm), float(y_mm), float(z_mm), roll, pitch, yaw]
+        req.speed = 50.0  
+        req.acc = 50.0
         
-        self.get_logger().info(f"Enviando trayectoria: X:{x_mm:.1f} Y:{y_mm:.1f} Z:{z_mm:.1f}")
+        self.get_logger().info(f"Enviando trayectoria: X:{x_mm:.1f} Y:{y_mm:.1f} Z:{z_mm:.1f} (milímetros)")
         future = self.cli_cartesian.call_async(req)
         future.add_done_callback(self.pick_done_callback)
 
     def pick_done_callback(self, future):
         try:
-            future.result()
+            respuesta = future.result()
+            
+            if respuesta.ret != 0:
+                self.get_logger().error(f"Movimiento rechazado por xArm")
+                self.get_logger().error(f"Codigo de error: {respuesta.ret} - Mensaje: {respuesta.message}")
+                self.ocupado = False
+                return
+
             self.get_logger().info("Llegó a la posición segura sobre el cubo. Simulando agarre...")
             self.timer_agarre = self.create_timer(2.0, self.finalizar_agarre)
         except Exception as e:
-            self.get_logger().error(f"Fallo en trayectoria cartesiana: {e}")
+            self.get_logger().error(f"Fallo en comunicación ROS2: {e}")
             self.ocupado = False
 
     def finalizar_agarre(self):

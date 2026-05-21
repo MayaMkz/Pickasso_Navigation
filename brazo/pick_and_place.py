@@ -2,6 +2,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Point
 import numpy as np
+import math
 
 # Agregamos SetInt16, que es el tipo de mensaje que usan Mode y State
 from xarm_msgs.srv import MoveCartesian, MoveJoint, SetInt16
@@ -120,6 +121,13 @@ class PickAndPlaceNode(Node):
         y_cam_mm = msg.y * 1000.0
         z_cam_mm = msg.z * 1000.0
 
+        # --- FILTRO ANTI-BASURA (NUEVO) ---
+        # Si la cámara lee que el cubo está a más de 1.5 metros o a menos de 15 cm, es un error del sensor.
+        if z_cam_mm > 1500.0 or z_cam_mm < 150.0:
+            self.get_logger().warn(f"Lectura óptica ignorada por seguridad (Z={z_cam_mm:.1f} mm)")
+            self.ocupado = False
+            return
+
         # --- CINEMÁTICA EYE-IN-HAND ---
         # 1. El vector homogéneo respecto al lente de la cámara
         punto_camara = np.array([x_cam_mm, y_cam_mm, z_cam_mm, 1.0])
@@ -151,13 +159,16 @@ class PickAndPlaceNode(Node):
         # Orientación Opción A para brazo de 5GDL
         roll = 3.14159  
         pitch = 0.0
-        yaw = 0.0
+
+        # El Yaw debe coincidir exactamente con el giro de la base (Motor 1)
+        # Usamos atan2(Y, X) para calcular ese ángulo en radianes.
+        yaw = math.atan2(y_mm, x_mm)
         
         req.pose = [float(x_mm), float(y_mm), float(z_mm), roll, pitch, yaw]
         req.speed = 50.0  
         req.acc = 50.0
         
-        self.get_logger().info(f"Enviando trayectoria: X:{x_mm:.1f} Y:{y_mm:.1f} Z:{z_mm:.1f} (milímetros)")
+        self.get_logger().info(f"Enviando trayectoria: X:{x_mm:.1f} Y:{y_mm:.1f} Z:{z_mm:.1f} Yaw:{yaw:.2f} rad")
         future = self.cli_cartesian.call_async(req)
         future.add_done_callback(self.pick_done_callback)
 

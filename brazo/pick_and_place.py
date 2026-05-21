@@ -39,23 +39,23 @@ class PickAndPlaceNode(Node):
         # 1. T_brida_camara: Desfase FÍSICO FIJO de la cámara respecto al efector final.
         # TODO: Rellenar con RoboDK (Cámara respecto a xArm5 TCP/Flange)
         self.T_brida_camara = np.array([
-            [1.0,  0.0,  0.0,    0.0],  # Ej: Desfase en X (mm)
-            [0.0, -1.0,  0.0,    0.0],  # Ej: Desfase en Y (mm)
-            [0.0,  0.0, -1.0,   76.1],  # Ej: Desfase en Z (mm)
+            [1.0,  0.0,  0.0,    67.505793],  # Ej: Desfase en X (mm)
+            [0.0, 1.0,  0.0,    7.342],  # Ej: Desfase en Y (mm)
+            [0.0,  0.0, 1.0,   35.899772],  # Ej: Desfase en Z (mm)
             [0.0,  0.0,  0.0,    1.0]
         ])
 
         # 2. T_base_brida_home: Pose de la brida respecto a la base del robot en la postura de lectura.
         # TODO: Rellenar con RoboDK (TCP respecto a Base) asegurando que el robot está en su "custom_home_joints"
         self.T_base_brida_home = np.array([
-            [1.0, 0.0, 0.0,  274.5],  
-            [0.0, 1.0, 0.0,   -7.3],
-            [0.0, 0.0, 1.0,  450.0],  # <-- Asegúrate de que esta altura de lectura sea > 400mm
+            [1.0, 0.0, 0.0,  376.919808],  
+            [0.0, -1.0, -0.000174,   -0.043528],
+            [0.0, 0.0, -1.0,  342.996568],  # <-- Asegúrate de que esta altura de lectura sea > 400mm
             [0.0, 0.0, 0.0,    1.0]
         ])
 
         # --- CONFIGURACIÓN DE HOME ---
-        self.custom_home_joints = [0.0, -1.309, -0.349066, 1.22173, 0.0] 
+        self.custom_home_joints = [0.0, -0.349066, -1.13446, 1.48353, 0.0] 
         
         # Iniciar cadena de activación del robot
         self.inicializar_robot()

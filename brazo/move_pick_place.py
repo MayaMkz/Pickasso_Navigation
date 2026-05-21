@@ -96,9 +96,9 @@ class PickAndPlaceStaticNode(Node):
         future_home.add_done_callback(self.home_done_callback)
 
     def home_done_callback(self, future):
-        self.get_logger().info("Home alcanzado.")
+        self.get_logger().info("Inicio de viaje a Home")
         # Pausa de 1.5 segundos para estabilizar vibraciones mecánicas antes de encender cámara
-        self.ejecutar_con_retraso(1.5, self.iniciar_camara)
+        self.ejecutar_con_retraso(6.0, self.iniciar_camara)
 
     # ==========================================
     # FASE 2: CÁMARA (ESPERAR LETRA 'S')
@@ -197,7 +197,7 @@ class PickAndPlaceStaticNode(Node):
         # Pausa antes de moverse
         self.ejecutar_con_retraso(1.5, lambda: self.ejecutar_pick(x_robot, y_robot, z_robot))
 
-    # ==========================================
+# ==========================================
     # FASE 4: MOVIMIENTO FÍSICO AL CUBO
     # ==========================================
     def ejecutar_pick(self, x_mm, y_mm, z_mm):
@@ -205,7 +205,6 @@ class PickAndPlaceStaticNode(Node):
         roll = 3.14159  
         pitch = 0.0
         
-        # Solución al Error C21 de cinemática
         yaw = math.atan2(y_mm, x_mm)
         
         req.pose = [float(x_mm), float(y_mm), float(z_mm), roll, pitch, yaw]
@@ -223,15 +222,22 @@ class PickAndPlaceStaticNode(Node):
                 self.ejecutar_con_retraso(2.0, self.iniciar_camara)
                 return
 
-            self.get_logger().info("Posición alcanzada. Simulando agarre...")
-            # Pausa de 2 segundos simulando la acción del gripper
-            self.ejecutar_con_retraso(2.0, self.finalizar_agarre)
+            # --- LA CORRECCIÓN CLAVE ---
+            # El controlador aceptó la orden. Ahora esperamos el tiempo FÍSICO de viaje.
+            self.get_logger().info("Trayectoria aceptada. El robot está descendiendo (esperando 6s)...")
+            self.ejecutar_con_retraso(6.0, self.simular_agarre)
+            
         except Exception as e:
             self.get_logger().error(f"Fallo en comunicación: {e}")
 
     # ==========================================
-    # FASE 5: RETORNAR A HOME Y REPETIR
+    # FASE 5: AGARRE Y RETORNO
     # ==========================================
+    def simular_agarre(self):
+        # Esta función solo se dispara cuando el robot ya terminó de bajar físicamente
+        self.get_logger().info("Robot en el objetivo. Simulando cierre de gripper (2s)...")
+        self.ejecutar_con_retraso(2.0, self.finalizar_agarre)
+
     def finalizar_agarre(self):
         self.get_logger().info("Agarre completado. Volviendo a Home...")
         req = MoveJoint.Request()
@@ -239,8 +245,12 @@ class PickAndPlaceStaticNode(Node):
         req.speed = 0.25; req.acc = 1.0
         future = self.cli_joint.call_async(req)
         
-        # Una vez que llega a Home, vuelve a encender la cámara para el siguiente cubo
-        future.add_done_callback(lambda f: self.ejecutar_con_retraso(1.5, self.iniciar_camara))
+        # Le damos tiempo FÍSICO al robot de volver a subir a Home antes de encender la cámara
+        future.add_done_callback(self.home_en_progreso_callback)
+
+    def home_en_progreso_callback(self, future):
+        self.get_logger().info("Robot en camino a Home (esperando 6s)...")
+        self.ejecutar_con_retraso(6.0, self.iniciar_camara)
 
 def main(args=None):
     rclpy.init(args=args)

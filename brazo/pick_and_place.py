@@ -30,28 +30,25 @@ class PickAndPlaceNode(Node):
         # Candado de seguridad puesto al iniciar
         self.ocupado = True
 
-        self.camara_invertida = True
-
         # ========================================================
         # LÓGICA DE TRANSFORMADAS HOMOGÉNEAS (EYE-IN-HAND)
         # ========================================================
         
-        # 1. T_brida_camara: Desfase FÍSICO FIJO de la cámara respecto al efector final.
-        # TODO: Rellenar con RoboDK (Cámara respecto a xArm5 TCP/Flange)
+        # 1. T_brida_camara: Desfase FÍSICO FIJO y ROTACIÓN de la cámara respecto al efector final.
+        # Los -1.0 en X y Y absorben nativamente el hecho de que la cámara está invertida (girada 180° en Z)
         self.T_brida_camara = np.array([
-            [1.0,  0.0,  0.0,    67.505793],  # Ej: Desfase en X (mm)
-            [0.0, 1.0,  0.0,    7.342],  # Ej: Desfase en Y (mm)
-            [0.0,  0.0, 1.0,   35.899772],  # Ej: Desfase en Z (mm)
-            [0.0,  0.0,  0.0,    1.0]
+            [-1.0,  0.0,  0.0,    67.505793],  # X invertido nativamente
+            [ 0.0, -1.0,  0.0,     7.342000],  # Y invertido nativamente
+            [ 0.0,  0.0,  1.0,    35.899772],  
+            [ 0.0,  0.0,  0.0,     1.0     ]
         ])
 
         # 2. T_base_brida_home: Pose de la brida respecto a la base del robot en la postura de lectura.
-        # TODO: Rellenar con RoboDK (TCP respecto a Base) asegurando que el robot está en su "custom_home_joints"
         self.T_base_brida_home = np.array([
-            [1.0, 0.0, 0.0,  376.919808],  
+            [1.0,  0.0,  0.0,       376.919808],  
             [0.0, -1.0, -0.000174,   -0.043528],
-            [0.0, 0.0, -1.0,  342.996568],  # <-- Asegúrate de que esta altura de lectura sea > 400mm
-            [0.0, 0.0, 0.0,    1.0]
+            [0.0,  0.0, -1.0,       342.996568],  # Asegúrate de que esta altura de lectura sea > 400mm si da problemas el sensor
+            [0.0,  0.0,  0.0,         1.0     ]
         ])
 
         # --- CONFIGURACIÓN DE HOME ---
@@ -123,28 +120,24 @@ class PickAndPlaceNode(Node):
         y_cam_mm = msg.y * 1000.0
         z_cam_mm = msg.z * 1000.0
 
-        if self.camara_invertida:
-            x_cam_mm = -x_cam_mm
-            y_cam_mm = -y_cam_mm
-
         # --- CINEMÁTICA EYE-IN-HAND ---
-        # 1. El punto respecto a la cámara
+        # 1. El vector homogéneo respecto al lente de la cámara
         punto_camara = np.array([x_cam_mm, y_cam_mm, z_cam_mm, 1.0])
         
-        # 2. Calcular matriz total: T_base_camara = T_base_brida * T_brida_camara
+        # 2. Calcular matriz de transformación total: T_base_camara = T_base_brida * T_brida_camara
         T_base_camara = np.dot(self.T_base_brida_home, self.T_brida_camara)
         
-        # 3. Proyectar el punto del cubo a la base del robot
+        # 3. Proyectar el vector del cubo hacia el origen de la base del robot
         punto_base = np.dot(T_base_camara, punto_camara)
 
         x_robot = punto_base[0]
         y_robot = punto_base[1]
 
-        # Compensacion del gripper
-        longitud_gripper_mm = 160.0  # TODO: Mide tu gripper real y pon el valor aquí
-        margen_seguridad_mm = 100.0  # Los 15 cm por encima del cubo para probar
+        # Compensación geométrica del efector final
+        longitud_gripper_mm = 160.0  
+        margen_seguridad_mm = 100.0  
         
-        # Z seguro de prueba (15 cm arriba del cubo)
+        # Cálculo del Z objetivo (10 cm por encima del cubo)
         z_robot = punto_base[2] + longitud_gripper_mm + margen_seguridad_mm
 
         self.ejecutar_pick(x_robot, y_robot, z_robot)

@@ -250,11 +250,18 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        if nodo.pipeline:
-            nodo.pipeline.stop()
+        # Parche de seguridad para el apagado de la cámara
+        try:
+            if nodo.pipeline:
+                nodo.pipeline.stop()
+        except RuntimeError:
+            pass # Ignoramos el error si la cámara nunca logró arrancar
+            
         cv2.destroyAllWindows()
         nodo.destroy_node()
         rclpy.shutdown()
 
+if __name__ == '__main__':
+    main()
 if __name__ == '__main__':
     main()

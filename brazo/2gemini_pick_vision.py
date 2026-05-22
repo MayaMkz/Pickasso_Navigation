@@ -28,18 +28,21 @@ TF_FLANGE = 'link5'
 
 HOME_JOINTS = [0.0, -0.349066, -1.13446, 1.48353, 0.0]
 
-CAMERA_Z_OFFSET_M = 0.25  # 25 cm de altura para centrar la cámara y observar
-PICK_OFFSET_Z_M   = 0.10  # 10 cm de seguridad antes del agarre
-GRIPPER_LENGTH_M  = 0.160 # 160 mm de longitud de la pinza de 2 dedos
+CAMERA_Z_OFFSET_M = 0.20  # 25 cm de altura para centrar la cámara y observar
+PICK_OFFSET_Z_M   = 0.03  # 10 cm de seguridad antes del agarre
+
+# --- MODIFICACIONES APLICADAS ---
+GRIPPER_LENGTH_M  = 0.170 # Actualizado a 170 mm
+Z_AGARRE_EXTRA_M  = 0.025 # Baja 2.5 cm EXTRA desde la tapa del cubo para abrazarlo
 
 WS_X_MIN, WS_X_MAX =  0.05,  0.70
 WS_Y_MIN, WS_Y_MAX = -0.50,  0.50
 WS_Z_MIN, WS_Z_MAX = -0.05,  0.70
 
-# Transformación Brida a Cámara (Rotada 180 grados en el montaje físico)
+# Transformación Brida a Cámara (Marcos cruzados corregidos)
 T_BRIDA_CAM = np.array([
-    [0,  1.,  0.,  0.067506],
-    [ -1., 0.,  0.,  0.007342],
+    [ 0.,  1.,  0.,  0.067506],
+    [-1.,  0.,  0.,  0.007342],
     [ 0.,  0.,  1.,  0.035900],
     [ 0.,  0.,  0.,  1.       ]
 ], dtype=np.float64)
@@ -64,7 +67,6 @@ def tf_stamped_to_matrix(tf_stamped) -> np.ndarray:
     return T
 
 def quat_to_rot_matrix(q: list) -> np.ndarray:
-    """Convierte cuaternión [x, y, z, w] a matriz de rotación 3x3"""
     qx, qy, qz, qw = q
     return np.array([
         [1 - 2*(qy*qy + qz*qz),     2*(qx*qy - qw*qz),     2*(qx*qz + qw*qy)],
@@ -169,7 +171,6 @@ class PickAndPlaceNode(Node):
             yaw  = math.atan2(y_obj, x_obj)
             quat = quat_gripper_apuntando_abajo(yaw)
             
-            # Matriz de rotación de la brida para compensar offsets
             R_target = quat_to_rot_matrix(quat)
 
             # ──────────────────────────────────────────────────────────
@@ -208,11 +209,15 @@ class PickAndPlaceNode(Node):
             # FASE 3: BAJAR AL DADO (PICK)
             # ──────────────────────────────────────────────────────────
             self.get_logger().info('👇 FASE 3: Bajando al cubo...')
-            p_grip_pick = np.array([x_obj, y_obj, z_obj])
+            # AQUI ESTA LA MAGIA: Le restamos Z_AGARRE_EXTRA_M para obligarlo a penetrar
+            p_grip_pick = np.array([x_obj, y_obj, z_obj - Z_AGARRE_EXTRA_M])
             p_brida_pick = p_grip_pick - R_target @ t_grip
 
+            # Si MoveIt rechaza la bajada, ahora te lo imprimirá en rojo
             if self._plan_pose(p_brida_pick[0], p_brida_pick[1], p_brida_pick[2], quat, 'PICK'):
                 self._exec_plan()
+            else:
+                self.get_logger().error('🚨 MoveIt rechazó la bajada al cubo. Probablemente detectó colisión con la mesa o Z_MIN.')
 
             # ──────────────────────────────────────────────────────────
             # FASE 4: CERRAR GRIPPER
@@ -226,7 +231,6 @@ class PickAndPlaceNode(Node):
             if self._plan_pose(p_brida_pre[0], p_brida_pre[1], p_brida_pre[2], quat, 'POST-PICK'):
                 self._exec_plan()
 
-            # Verificación visual final
             time.sleep(2.0)
             with self._lock:
                 nuevo_punto = self._last_point
@@ -261,8 +265,13 @@ class PickAndPlaceNode(Node):
         req.target.position.x, req.target.position.y, req.target.position.z = float(x), float(y), float(z)
         req.target.orientation.x, req.target.orientation.y = float(quat[0]), float(quat[1])
         req.target.orientation.z, req.target.orientation.w = float(quat[2]), float(quat[3])
+        
         resp = self._call_srv(self._arm_plan, req, timeout=20.0)
-        return resp is not None and resp.success
+        if resp is not None and resp.success:
+            return True
+        else:
+            self.get_logger().error(f'❌ Falló el plan de MoveIt hacia: {nombre}')
+            return False
 
     def _exec_plan(self) -> bool:
         req = PlanExec.Request()
@@ -272,7 +281,7 @@ class PickAndPlaceNode(Node):
 
     def _mover_gripper(self, cerrar: bool):
         req = PlanJoint.Request()
-        req.target = [0.85]*6 if cerrar else [0.0]*6
+        req.target = [0.5]*6 if cerrar else [0.0]*6
         resp_plan = self._call_srv(self._grip_plan, req, timeout=5.0)
         if resp_plan and resp_plan.success:
             req_exec = PlanExec.Request()

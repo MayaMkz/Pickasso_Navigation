@@ -38,8 +38,8 @@ WS_Z_MIN, WS_Z_MAX = -0.05,  0.70
 
 # Transformación Brida a Cámara (Rotada 180 grados en el montaje físico)
 T_BRIDA_CAM = np.array([
-    [-1.,  0.,  0.,  0.067506],
-    [ 0., -1.,  0.,  0.007342],
+    [0,  1.,  0.,  0.067506],
+    [ -1., 0.,  0.,  0.007342],
     [ 0.,  0.,  1.,  0.035900],
     [ 0.,  0.,  0.,  1.       ]
 ], dtype=np.float64)

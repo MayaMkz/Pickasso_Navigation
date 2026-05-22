@@ -1,3 +1,9 @@
+#---Terminal 1: ros2 launch xarm_planner xarm5_planner_realmove.launch.py robot_ip:=192.168.1.234
+
+#Terminal 2: ros2 run logica_almacen deteccion
+
+#Terminal 3: ros2 run logica_almacen pick_place
+
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node

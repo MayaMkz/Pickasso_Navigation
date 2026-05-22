@@ -341,7 +341,7 @@ class PickAndPlaceNode(Node):
             return
 
         z = msg.z
-        if not (0.15 < z < 1.50):
+        if not (0.07 < z < 1.50):
             self.get_logger().warn(
                 f'⚠ Lectura de visión descartada: Z={z:.3f}m '
                 f'(rango válido: 0.15–1.50m)')

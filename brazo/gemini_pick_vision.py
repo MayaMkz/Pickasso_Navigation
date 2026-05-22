@@ -1,225 +1,340 @@
-#---Terminal 1: ros2 launch xarm_planner xarm5_planner_realmove.launch.py robot_ip:=192.168.1.234
-
-#Terminal 2: ros2 run logica_almacen deteccion
-
-#Terminal 3: ros2 run logica_almacen pick_place
-
 #!/usr/bin/env python3
+"""
+pick_and_place.py — Sistema Pick & Place para xArm5 con visión Eye-in-Hand
+===========================================================================
+Prerrequisitos (terminales separadas, en orden):
+
+  Terminal 1 — Nodo del robot real + MoveIt + RViz (SIN GAZEBO):
+    ros2 launch xarm_planner xarm5_planner_realmove.launch.py robot_ip:=192.168.1.234 add_gripper:=true
+
+  Terminal 2 — Nodo de visión:
+    ros2 run logica_almacen vision_all_in_one
+
+  Terminal 3 — Este nodo:
+    ros2 run logica_almacen pick_and_place
+
+Arquitectura general:
+  vision_all_in_one  →  /coordenadas_cubo_3d (Point, metros)
+        ↓
+  pick_and_place  →  TF lookup (link_base ← link5, tiempo real)
+        ↓
+  Cinemática Eye-in-Hand:  p_base = T_base_brida × T_brida_cam × p_cam
+        ↓
+  MoveIt PlanPose  →  muestra fantasma en RViz
+        ↓
+  [ENTER usuario]  →  MoveIt PlanExec  →  movimiento real
+        ↓
+  Verificación de visión  →  loop / home
+"""
+
 import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
+
 from geometry_msgs.msg import Point
 from xarm_msgs.srv import PlanPose, PlanExec, PlanJoint
 
 import tf2_ros
 from tf2_ros import TransformException
+
 import numpy as np
 import math
-import time
-import sys
-import select
-import tty
-import termios
 import threading
-import os
+import time
 
-# --- PARO DE EMERGENCIA ---
-def paro_de_emergencia():
-    """Hilo de fondo que escucha la tecla 'q' al instante para un E-Stop seguro"""
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-    try:
-        tty.setcbreak(sys.stdin.fileno())
-        while True:
-            if select.select([sys.stdin], [], [], 0.1)[0]:
-                tecla = sys.stdin.read(1)
-                if tecla.lower() == 'q':
-                    print("\r\n\r\n [PARO DE EMERGENCIA] Tecla 'q' detectada. Abortando programa... \r\n")
-                    os._exit(1)
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+# ──────────────────────────────────────────────────────────────────────
+# CONFIGURACIÓN GLOBAL
+# ──────────────────────────────────────────────────────────────────────
+TF_BASE   = 'link_base'
+TF_FLANGE = 'link5'
 
-# --- MATRICES Y CONSTANTES ---
-# T_brida_cam: Cámara a la brida (rotada 180 grados, según tus mediciones)
+# Posición HOME en espacio de articulaciones [rad]
+HOME_JOINTS = [0.0, -0.349066, -1.13446, 1.48353, 0.0]
+
+PICK_OFFSET_Z_M = 0.10    # 10 cm
+GRIPPER_LENGTH_M = 0.160  # 160 mm
+
+WS_X_MIN, WS_X_MAX =  0.05,  0.70
+WS_Y_MIN, WS_Y_MAX = -0.50,  0.50
+WS_Z_MIN, WS_Z_MAX = -0.05,  0.70
+
+# ──────────────────────────────────────────────────────────────────────
+# MATRICES DE TRANSFORMACIÓN FIJAS (en metros)
+# ──────────────────────────────────────────────────────────────────────
 T_BRIDA_CAM = np.array([
-    [-1.0, -0.0,  0.0, 0.067506],
-    [ 0.0, -1.0,  0.0, 0.007342],
-    [-0.0, -0.0,  1.0, 0.035900],
-    [ 0.0,  0.0,  0.0, 1.0     ]
-])
+    [-1.,  0.,  0.,  0.067506],
+    [ 0., -1.,  0.,  0.007342],
+    [ 0.,  0.,  1.,  0.035900],
+    [ 0.,  0.,  0.,  1.       ]
+], dtype=np.float64)
 
-GRIPPER_OFFSET_Z = 0.16  # 16 cm de la brida a la punta de los 2 dedos
-PICK_OFFSET_Z = 0.10     # 10 cm de altura de seguridad sobre el dado
-
-def tf_stamped_to_matrix(tf_stamped):
-    """Convierte TransformStamped a matriz homogénea 4x4."""
-    t = tf_stamped.transform.translation
-    q = tf_stamped.transform.rotation
+# ──────────────────────────────────────────────────────────────────────
+# UTILIDADES MATEMÁTICAS
+# ──────────────────────────────────────────────────────────────────────
+def tf_stamped_to_matrix(tf_stamped) -> np.ndarray:
+    t  = tf_stamped.transform.translation
+    q  = tf_stamped.transform.rotation
     qx, qy, qz, qw = q.x, q.y, q.z, q.w
 
     rot = np.array([
-        [1 - 2*(qy**2 + qz**2), 2*(qx*qy - qw*qz),     2*(qx*qz + qw*qy)],
-        [2*(qx*qy + qw*qz),     1 - 2*(qx**2 + qz**2), 2*(qy*qz - qw*qx)],
-        [2*(qx*qz - qw*qy),     2*(qy*qz + qw*qx),     1 - 2*(qx**2 + qy**2)]
-    ])
-    T = np.eye(4)
+        [1 - 2*(qy*qy + qz*qz),     2*(qx*qy - qw*qz),     2*(qx*qz + qw*qy)],
+        [    2*(qx*qy + qw*qz), 1 - 2*(qx*qx + qz*qz),     2*(qy*qz - qw*qx)],
+        [    2*(qx*qz - qw*qy),     2*(qy*qz + qw*qx), 1 - 2*(qx*qx + qy*qy)]
+    ], dtype=np.float64)
+
+    T = np.eye(4, dtype=np.float64)
     T[:3, :3] = rot
-    T[:3, 3] = [t.x, t.y, t.z]
+    T[:3,  3] = [t.x, t.y, t.z]
     return T
 
-class VisionPickAndPlace(Node):
+def rpy_to_quat(roll: float, pitch: float, yaw: float) -> list:
+    cr, sr = math.cos(roll  / 2.), math.sin(roll  / 2.)
+    cp, sp = math.cos(pitch / 2.), math.sin(pitch / 2.)
+    cy, sy = math.cos(yaw   / 2.), math.sin(yaw   / 2.)
+
+    qw =  cr*cp*cy + sr*sp*sy
+    qx =  sr*cp*cy - cr*sp*sy
+    qy =  cr*sp*cy + sr*cp*sy
+    qz =  cr*cp*sy - sr*sp*cy
+    return [qx, qy, qz, qw]
+
+def quat_gripper_apuntando_abajo(yaw: float) -> list:
+    return rpy_to_quat(math.pi, 0.0, yaw)
+
+def dentro_workspace(x: float, y: float, z: float) -> bool:
+    return (WS_X_MIN <= x <= WS_X_MAX and
+            WS_Y_MIN <= y <= WS_Y_MAX and
+            WS_Z_MIN <= z <= WS_Z_MAX)
+
+# ──────────────────────────────────────────────────────────────────────
+# NODO PRINCIPAL
+# ──────────────────────────────────────────────────────────────────────
+class PickAndPlaceNode(Node):
     def __init__(self):
-        super().__init__('vision_pick_place')
-        self.cbg = ReentrantCallbackGroup()
+        super().__init__('xarm5_pick_place')
+        self._cbg = ReentrantCallbackGroup()
 
-        # Clientes MoveIt
-        self.arm_plan = self.create_client(PlanPose, '/xarm_pose_plan', callback_group=self.cbg)
-        self.arm_exec = self.create_client(PlanExec, '/xarm_exec_plan', callback_group=self.cbg)
-        self.grip_plan = self.create_client(PlanJoint, '/xarm_gripper_joint_plan', callback_group=self.cbg)
-        self.grip_exec = self.create_client(PlanExec, '/xarm_gripper_exec_plan', callback_group=self.cbg)
+        # Clientes MoveIt (eliminamos servicios directos de hardware para evitar bloqueos)
+        self._arm_plan  = self.create_client(PlanPose,  '/xarm_pose_plan',           callback_group=self._cbg)
+        self._arm_exec  = self.create_client(PlanExec,  '/xarm_exec_plan',           callback_group=self._cbg)
+        self._arm_joint_plan = self.create_client(PlanJoint, '/xarm_joint_plan',     callback_group=self._cbg)
+        self._grip_plan = self.create_client(PlanJoint, '/xarm_gripper_joint_plan',  callback_group=self._cbg)
+        self._grip_exec = self.create_client(PlanExec,  '/xarm_gripper_exec_plan',   callback_group=self._cbg)
 
-        # Subs y TF
-        self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-        self.vision_sub = self.create_subscription(Point, '/coordenadas_cubo_3d', self.vision_cb, 10, callback_group=self.cbg)
+        # TF2
+        self._tf_buf = tf2_ros.Buffer()
+        self._tf_lst = tf2_ros.TransformListener(self._tf_buf, self)
 
-        self.dado_detectado = None
-        self.ocupado = False
+        # Suscriptor
+        self._sub = self.create_subscription(
+            Point, 'coordenadas_cubo_3d', self._vision_cb, 10, callback_group=self._cbg)
 
-        self.get_logger().info('Conectando con MoveIt...')
-        self.arm_plan.wait_for_service()
-        self.arm_exec.wait_for_service()
-        self.grip_plan.wait_for_service()
-        self.grip_exec.wait_for_service()
-        self.get_logger().info('¡Conexión establecida! PRESIONA "q" PARA PARO DE EMERGENCIA.')
+        self._busy        = True
+        self._last_point  = None
+        self._lock        = threading.Lock()
 
-    def vision_cb(self, msg):
-        if not self.ocupado:
-            self.dado_detectado = msg
+        self._worker = threading.Thread(target=self._hilo_logica, daemon=True)
+        self._worker.start()
 
-    def mover_brazo(self, x, y, z, roll=3.1416, pitch=0.0, yaw=0.0, nombre_pose="Posición"):
-        self.get_logger().info(f'---> Calculando plan a {nombre_pose}: [X:{x:.3f}, Y:{y:.3f}, Z:{z:.3f}]')
-        
-        # Conversión simple RPY a Cuaternión para apuntar hacia abajo
-        cy, sy = math.cos(yaw * 0.5), math.sin(yaw * 0.5)
-        cp, sp = math.cos(pitch * 0.5), math.sin(pitch * 0.5)
-        cr, sr = math.cos(roll * 0.5), math.sin(roll * 0.5)
-        qw = cr * cp * cy + sr * sp * sy
-        qx = sr * cp * cy - cr * sp * sy
-        qy = cr * sp * cy + sr * cp * sy
-        qz = cr * cp * sy - sr * sp * cy
+        self.get_logger().info('🤖 Nodo iniciado. Esperando servicios...')
 
-        req_plan = PlanPose.Request()
-        req_plan.target.position.x = x
-        req_plan.target.position.y = y
-        req_plan.target.position.z = z
-        req_plan.target.orientation.x = qx
-        req_plan.target.orientation.y = qy
-        req_plan.target.orientation.z = qz
-        req_plan.target.orientation.w = qw
+    def _call_srv(self, client, request, timeout: float = 20.0):
+        future = client.call_async(request)
+        t0 = time.time()
+        while not future.done():
+            if time.time() - t0 > timeout:
+                self.get_logger().error(f'⏱ Timeout ({timeout}s) esperando: {client.srv_name}')
+                return None
+            time.sleep(0.02)
+        return future.result()
 
-        future_plan = self.arm_plan.call_async(req_plan)
-        rclpy.spin_until_future_complete(self, future_plan)
-        
-        if future_plan.result().success:
-            print("\n" + "="*50)
-            print("  ✅ Plan calculado. Revisa RViz.")
-            input("  ▶  Presiona [ENTER] para EJECUTAR el movimiento...")
-            print("="*50 + "\n")
-            
-            self.get_logger().info('Ejecutando movimiento real...')
-            req_exec = PlanExec.Request()
-            req_exec.wait = True 
-            future_exec = self.arm_exec.call_async(req_exec)
-            rclpy.spin_until_future_complete(self, future_exec)
-            return True
-        else:
-            self.get_logger().error(f'Colisión o Singularidad al ir a {nombre_pose}')
-            return False
+    def _esperar_servicios(self):
+        criticos = {
+            'arm_plan':       self._arm_plan,
+            'arm_exec':       self._arm_exec,
+            'arm_joint_plan': self._arm_joint_plan
+        }
+        opcionales = {
+            'grip_plan':  self._grip_plan,
+            'grip_exec':  self._grip_exec,
+        }
 
-    def operar_gripper(self, cerrar=True):
-        req_plan = PlanJoint.Request()
-        # Pinza de 2 dedos: 0.85 cerrado, 0.0 abierto
-        if cerrar:
-            self.get_logger().info('>< CERRANDO gripper...')
-            req_plan.target = [0.85, 0.85, 0.85, 0.85, 0.85, 0.85]
-        else:
-            self.get_logger().info('<> ABRIENDO gripper...')
-            req_plan.target = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        for nombre, srv in criticos.items():
+            while not srv.wait_for_service(timeout_sec=2.0):
+                self.get_logger().warn(f'  ⏳ Esperando servicio crítico: {srv.srv_name}')
+            self.get_logger().info(f'  ✔ {nombre}: {srv.srv_name}')
 
-        future_plan = self.grip_plan.call_async(req_plan)
-        rclpy.spin_until_future_complete(self, future_plan)
-        
-        if future_plan.result().success:
-            req_exec = PlanExec.Request()
-            req_exec.wait = True
-            future_exec = self.grip_exec.call_async(req_exec)
-            rclpy.spin_until_future_complete(self, future_exec)
-            time.sleep(0.5) 
-        else:
-            self.get_logger().error('Fallo al planificar el gripper.')
+        for nombre, srv in opcionales.items():
+            ok = srv.wait_for_service(timeout_sec=3.0)
+            if ok:
+                self.get_logger().info(f'  ✔ {nombre} (gripper MoveIt): disponible')
+            else:
+                self.get_logger().warn(f'  ⚠ {nombre} no disponible. ¿Lanzaste con add_gripper:=true?')
 
-    def calcular_pose_base(self, p_cam_x, p_cam_y, p_cam_z):
-        try:
-            tf_stamp = self.tf_buffer.lookup_transform('link_base', 'link5', rclpy.time.Time())
-            T_base_brida = tf_stamped_to_matrix(tf_stamp)
-            
-            p_cam = np.array([p_cam_x, p_cam_y, p_cam_z, 1.0])
-            T_base_cam = T_base_brida @ T_BRIDA_CAM
-            p_base = T_base_cam @ p_cam
-            return p_base[0], p_base[1], p_base[2]
-        except TransformException as ex:
-            self.get_logger().error(f'Error de TF: {ex}')
-            return None
+        self.get_logger().info('✅ Todos los servicios de MoveIt verificados.\n')
 
-def main(args=None):
-    hilo_paro = threading.Thread(target=paro_de_emergencia, daemon=True)
-    hilo_paro.start()
+    def _vision_cb(self, msg: Point):
+        if self._busy:
+            return
 
-    rclpy.init(args=args)
-    robot = VisionPickAndPlace()
-    
-    home_x, home_y, home_z = 0.30, 0.00, 0.40
+        z = msg.z
+        if not (0.15 < z < 1.50):
+            self.get_logger().warn(f'⚠ Lectura descartada: Z={z:.3f}m')
+            return
 
-    try:
-        print("\n--- INICIANDO CICLO PICK AND PLACE CON VISIÓN ---")
-        robot.mover_brazo(home_x, home_y, home_z, nombre_pose="HOME")
-        robot.operar_gripper(cerrar=False)
+        with self._lock:
+            self._last_point = msg
+
+    def _hilo_logica(self):
+        self._esperar_servicios()
+        self._ir_a_home()
+
+        self._busy = False
+        self.get_logger().info('🎯 Sistema listo. Esperando detecciones...\n')
 
         while rclpy.ok():
-            rclpy.spin_once(robot, timeout_sec=0.1)
-            
-            if robot.dado_detectado and not robot.ocupado:
-                robot.ocupado = True
-                dado = robot.dado_detectado
-                robot.get_logger().info(f'Dado detectado por cámara: X:{dado.x:.3f}, Y:{dado.y:.3f}, Z:{dado.z:.3f}')
-                
-                coords_base = robot.calcular_pose_base(dado.x, dado.y, dado.z)
-                if coords_base:
-                    bx, by, bz = coords_base
-                    robot.get_logger().info(f'Dado en frame Base: X:{bx:.3f}, Y:{by:.3f}, Z:{bz:.3f}')
-                    
-                    # La brida (link5) debe estar más arriba compensando la herramienta y el offset
-                    target_z_pre = bz + GRIPPER_OFFSET_Z + PICK_OFFSET_Z
-                    target_z_pick = bz + GRIPPER_OFFSET_Z
-                    
-                    exito = robot.mover_brazo(bx, by, target_z_pre, nombre_pose="PRE-PICK")
-                    if exito:
-                        robot.mover_brazo(bx, by, target_z_pick, nombre_pose="PICK")
-                        robot.operar_gripper(cerrar=True)
-                        robot.mover_brazo(bx, by, target_z_pre, nombre_pose="POST-PICK")
-                        
-                        robot.mover_brazo(home_x, home_y, home_z, nombre_pose="HOME FINAL")
-                        robot.operar_gripper(cerrar=False)
-                        
-                robot.dado_detectado = None
-                robot.ocupado = False
+            with self._lock:
+                punto = self._last_point
+                self._last_point = None
 
+            if punto is None:
+                time.sleep(0.05)
+                continue
+
+            self._busy = True
+            self.get_logger().info(f'📦 Objeto detectado: X={punto.x:.3f}  Y={punto.y:.3f}  Z={punto.z:.3f}')
+
+            exito = self._ciclo_pick(punto)
+
+            estado = '✅ Éxito' if exito else '⚠ Sin éxito confirmado'
+            self.get_logger().info(f'{estado}. Regresando a HOME...\n')
+
+            self._ir_a_home()
+            self._busy = False
+            self.get_logger().info('🏠 HOME. Listo para el próximo objeto.\n')
+
+    def _ciclo_pick(self, punto: Point, max_intentos: int = 3) -> bool:
+        for intento in range(1, max_intentos + 1):
+            self.get_logger().info(f'\n── Intento {intento}/{max_intentos} ──')
+
+            resultado = self._calcular_pose_objeto(punto)
+            if resultado is None:
+                return False
+
+            x_obj, y_obj, z_obj = resultado
+            
+            yaw  = math.atan2(y_obj, x_obj)
+            quat = quat_gripper_apuntando_abajo(yaw)
+
+            x_t = x_obj
+            y_t = y_obj
+            z_t = z_obj + PICK_OFFSET_Z_M + GRIPPER_LENGTH_M
+
+            if not dentro_workspace(x_t, y_t, z_t):
+                self.get_logger().error('🚫 Target fuera del workspace.')
+                return False
+
+            if not self._plan_pose(x_t, y_t, z_t, quat, nombre='PRE-PICK'):
+                return False
+
+            print('\n' + '═' * 55)
+            print('  ✅ Plan calculado en RViz.')
+            print('  ▶  Presiona  [ENTER] para EJECUTAR.')
+            print('  ⛔  Presiona  Ctrl+C para CANCELAR.')
+            print('═' * 55)
+
+            try:
+                input('> ')
+            except (EOFError, KeyboardInterrupt):
+                return False
+
+            self.get_logger().info('🚀 Ejecutando trayectoria...')
+            if not self._exec_plan():
+                return False
+
+            time.sleep(2.0)
+
+            with self._lock:
+                nuevo_punto = self._last_point
+                self._last_point = None
+
+            if nuevo_punto is None:
+                return True
+            else:
+                punto = nuevo_punto
+
+        return False
+
+    def _calcular_pose_objeto(self, punto: Point):
+        try:
+            tf_stamp = self._tf_buf.lookup_transform(
+                TF_BASE, TF_FLANGE, rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=1.0)
+            )
+        except TransformException as exc:
+            self.get_logger().error(f'❌ TF lookup fallido: {exc}')
+            return None
+
+        T_base_brida = tf_stamped_to_matrix(tf_stamp)
+        p_cam = np.array([punto.x, punto.y, punto.z, 1.0], dtype=np.float64)
+        T_base_cam = T_base_brida @ T_BRIDA_CAM
+        p_base     = T_base_cam @ p_cam   
+
+        return float(p_base[0]), float(p_base[1]), float(p_base[2])
+
+    def _plan_pose(self, x, y, z, quat, nombre='Pose') -> bool:
+        req = PlanPose.Request()
+        req.target.position.x    = float(x)
+        req.target.position.y    = float(y)
+        req.target.position.z    = float(z)
+        req.target.orientation.x = float(quat[0])
+        req.target.orientation.y = float(quat[1])
+        req.target.orientation.z = float(quat[2])
+        req.target.orientation.w = float(quat[3])
+
+        resp = self._call_srv(self._arm_plan, req, timeout=20.0)
+        return resp is not None and resp.success
+
+    def _exec_plan(self) -> bool:
+        req = PlanExec.Request()
+        req.wait = True
+        resp = self._call_srv(self._arm_exec, req, timeout=40.0)
+        return resp is not None
+
+    def _mover_gripper(self, cerrar: bool):
+        req = PlanJoint.Request()
+        req.target = [0.85]*6 if cerrar else [0.0]*6
+        resp_plan = self._call_srv(self._grip_plan, req, timeout=5.0)
+        if resp_plan and resp_plan.success:
+            req_exec = PlanExec.Request()
+            req_exec.wait = True
+            self._call_srv(self._grip_exec, req_exec, timeout=10.0)
+            time.sleep(0.5)
+
+    def _ir_a_home(self):
+        self.get_logger().info('🏠 Planificando trayectoria a HOME...')
+        req = PlanJoint.Request()
+        req.target = HOME_JOINTS
+        resp = self._call_srv(self._arm_joint_plan, req, timeout=25.0)
+
+        if resp and resp.success:
+            self.get_logger().info('✔ Plan HOME calculado. Ejecutando...')
+            self._exec_plan()
+        else:
+            self.get_logger().warn('⚠ No se pudo planificar a HOME. Verifica colisiones.')
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = PickAndPlaceNode()
+    executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(node)
+
+    try:
+        executor.spin()
     except KeyboardInterrupt:
-        pass
+        node.get_logger().info('\n⛔ KeyboardInterrupt recibido.')
     finally:
-        robot.destroy_node()
+        node.destroy_node()
         rclpy.shutdown()
 
 if __name__ == '__main__':

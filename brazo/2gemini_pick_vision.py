@@ -33,7 +33,7 @@ PICK_OFFSET_Z_M   = 0.03  # 10 cm de seguridad antes del agarre
 
 # --- MODIFICACIONES APLICADAS ---
 GRIPPER_LENGTH_M  = 0.170 # Actualizado a 170 mm
-Z_AGARRE_EXTRA_M  = 0.025 # Baja 2.5 cm EXTRA desde la tapa del cubo para abrazarlo
+Z_AGARRE_EXTRA_M  = 0.01 # Baja 2.5 cm EXTRA desde la tapa del cubo para abrazarlo
 
 WS_X_MIN, WS_X_MAX =  0.05,  0.70
 WS_Y_MIN, WS_Y_MAX = -0.50,  0.50

@@ -17,7 +17,7 @@ class Vision3DNode(Node):
         
         # --- CONFIGURACIÓN DE ARUCO ---
         # NOTA: Cambia DICT_6X6_250 por el diccionario que hayas usado para imprimir tu ID 6
-        self.aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_6X6_250)
+        self.aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_250)
         self.aruco_params = aruco.DetectorParameters()
         
         # --- INICIALIZACIÓN FÍSICA DE LA CÁMARA REALSENSE ---

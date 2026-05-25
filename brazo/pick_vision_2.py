@@ -26,20 +26,20 @@ import time
 TF_BASE   = 'link_base'
 TF_FLANGE = 'link5'
 
-HOME_JOINTS         = [0.0, -0.349066, -1.13446, 1.48353, 0.0]
+HOME_JOINTS         = [0.0, 0.0, -2.04, 2.02, 0.0]
 # Giro de 90° (1.5708 rad) en la base para buscar el ArUco
-SEARCH_ARUCO_JOINTS = [1.5708, -0.349066, -1.13446, 1.48353, 0.0] 
+SEARCH_ARUCO_JOINTS = [1.5708, 0.0, -2.04, 2.02, 0.0] 
 
 CAMERA_Z_OFFSET_M = 0.20  # 20 cm de altura para centrar
 PICK_OFFSET_Z_M   = 0.03  # 3 cm de seguridad antes del agarre
 
 # --- OFFSETS DE PLACE (Ajustables) ---
-PLACE_OFFSET_X_M  = 0.08  # Deja el cubo 8 cm en X respecto al ArUco
+PLACE_OFFSET_X_M  = 0.05  # Deja el cubo 8 cm en X respecto al ArUco
 PLACE_OFFSET_Y_M  = 0.00  # Centrado en Y respecto al ArUco
 
 # --- PARÁMETROS FÍSICOS ---
 GRIPPER_LENGTH_M  = 0.170 
-Z_AGARRE_EXTRA_M  = 0.01  # Baja 1 cm EXTRA desde la tapa
+Z_AGARRE_EXTRA_M  = 0.19  # Baja 1 cm EXTRA desde la tapa
 
 WS_X_MIN, WS_X_MAX =  0.05,  0.70
 WS_Y_MIN, WS_Y_MAX = -0.50,  0.50

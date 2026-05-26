@@ -19,6 +19,8 @@ class Vision3DNode(Node):
         # NOTA: Cambia DICT_6X6_250 por el diccionario que hayas usado para imprimir tu ID 6
         self.aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_250)
         self.aruco_params = aruco.DetectorParameters()
+
+        self.aruco_detector = aruco.ArucoDetector(self.aruco_dict,self.aruco_params)
         
         # --- INICIALIZACIÓN FÍSICA DE LA CÁMARA REALSENSE ---
         self.pipeline = rs.pipeline()
@@ -72,7 +74,7 @@ class Vision3DNode(Node):
         # TAREA 1: DETECCIÓN DE ARUCO
         # ──────────────────────────────────────────────────────────
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        esquinas, ids, _ = aruco.detectMarkers(gray, self.aruco_dict, parameters=self.aruco_params)
+        esquinas, ids, _ = self.aruco_detector.detectMarkers(gray)
 
         if ids is not None:
             aruco.drawDetectedMarkers(frame, esquinas, ids)

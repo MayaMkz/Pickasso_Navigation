@@ -352,7 +352,7 @@ class PickAndPlaceNode(Node):
 
     def _mover_gripper(self, cerrar: bool):
         req = PlanJoint.Request()
-        req.target = [0.5]*6 if cerrar else [0.0]*6
+        req.target = [0.55]*6 if cerrar else [0.0]*6
         resp_plan = self._call_srv(self._grip_plan, req, timeout=5.0)
         if resp_plan and resp_plan.success:
             req_exec = PlanExec.Request()

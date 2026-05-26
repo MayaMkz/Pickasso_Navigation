@@ -366,8 +366,8 @@ class PickAndPlaceNode(Node):
         resp = self._call_srv(self._arm_joint_plan, req, timeout=25.0)
         if resp and resp.success:
             self._exec_plan()
-            if not self._busy: # Solo abrir el gripper si no estamos a mitad de una tarea
-                self._mover_gripper(cerrar=False)
+            # SE ELIMINÓ LA CONDICIÓN self._busy PARA QUE SIEMPRE ABRA AL VOLVER A CASA
+            self._mover_gripper(cerrar=False)
 
     def _ir_a_buscar_aruco(self):
         req = PlanJoint.Request()

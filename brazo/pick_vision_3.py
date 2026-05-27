@@ -149,7 +149,7 @@ class PickAndPlaceNode(Node):
         self._ir_a_home()
 
         self._busy = False
-        self.get_logger().info('🎯 Sistema listo. Esperando detecciones de cubo...\n')
+        self.get_logger().info('Sistema listo. Esperando detecciones de cubo...\n')
 
         while rclpy.ok():
             with self._lock:
@@ -168,29 +168,29 @@ class PickAndPlaceNode(Node):
             target_aruco_id = MAPA_COLOR_ARUCO.get(color_cubo)
             
             if not target_aruco_id:
-                self.get_logger().error(f'⚠️ Cubo "{color_cubo}" detectado, pero no tiene un ArUco asignado en MAPA_COLOR_ARUCO. Ignorando.')
+                self.get_logger().error(f'Cubo "{color_cubo}" detectado, pero no tiene un ArUco asignado en MAPA_COLOR_ARUCO. Ignorando.')
                 self._busy = False
                 continue
 
-            self.get_logger().info(f'📦 Cubo [{color_cubo.upper()}] detectado. Iniciando Pick y se llevará al ArUco ID: {target_aruco_id}')
+            self.get_logger().info(f'Cubo [{color_cubo.upper()}] detectado. Iniciando Pick y se llevará al ArUco ID: {target_aruco_id}')
 
             exito_pick = self._ciclo_pick(punto_cubo)
             
             if exito_pick:
-                self.get_logger().info(f'✅ Pick completado. Girando a buscar ArUco ID {target_aruco_id}...')
+                self.get_logger().info(f'Pick completado. Girando a buscar ArUco ID {target_aruco_id}...')
                 self._ir_a_buscar_aruco()
                 
                 punto_aruco = self._esperar_deteccion_aruco(target_aruco_id)
                 
                 if punto_aruco:
-                    self.get_logger().info(f'🎯 ArUco {target_aruco_id} detectado. Iniciando Place.')
+                    self.get_logger().info(f'ArUco {target_aruco_id} detectado. Iniciando Place.')
                     self._ciclo_place(punto_aruco)
                 else:
-                    self.get_logger().error(f'❌ No se encontró el ArUco {target_aruco_id} a tiempo. Abortando.')
+                    self.get_logger().error(f'No se encontró el ArUco {target_aruco_id} a tiempo. Abortando.')
 
             self._ir_a_home()
             self._busy = False
-            self.get_logger().info('🏠 HOME. Listo para el próximo objetivo.\n')
+            self.get_logger().info('HOME. Listo para el próximo objetivo.\n')
 
     def _esperar_deteccion_aruco(self, target_id: str, timeout_sec=15.0):
         """Espera a que el ID específico aparezca en el diccionario de visión"""

@@ -25,11 +25,11 @@ import time
 # ──────────────────────────────────────────────────────────────────────
 # Asocia la etiqueta de YOLO (color) con el ID del ArUco deseado
 MAPA_COLOR_ARUCO = {
-    'rojo': '6',
-    'azul': '7',
-    'amarillo': '8',
-    'rosa': '9',
-    'verde': '10'
+    'red': '6',
+    'blue': '7',
+    'yellow': '8',
+    'pink': '9',
+    'green': '10'
 }
 
 # ──────────────────────────────────────────────────────────────────────

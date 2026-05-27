@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-pick_and_place.py — Sistema Pick & Place para xArm5 (Sorting por Colores)
-===========================================================================
+pick_and_place.py — Sistema Pick & Place para xArm5 (Sorting por Colores con Retracción)
+========================================================================================
 """
 
 import rclpy
@@ -49,6 +49,7 @@ PLACE_OFFSET_Y_M  = 0.00
 
 GRIPPER_LENGTH_M  = 0.170 
 Z_AGARRE_EXTRA_M  = 0.19  
+Z_LIFT_M          = 0.05  # <--- NUEVO: Retracción de seguridad (5cm)
 
 T_BRIDA_CAM = np.array([
     [ 0.,  1.,  0.,  0.067506],
@@ -240,8 +241,16 @@ class PickAndPlaceNode(Node):
                 return False
 
             self._mover_gripper(cerrar=True)
+            time.sleep(0.5)
 
-            if self._plan_pose(p_brida_pre[0], p_brida_pre[1], p_brida_pre[2], quat, 'POST-PICK'): self._exec_plan()
+            # --- NUEVO: RETRACCIÓN DE 5 CM ANTES DE IR A POSICIÓN SEGURA ---
+            self.get_logger().info('👆 Subiendo 5cm (Retracción segura en Pick)...')
+            p_grip_post = np.array([x_obj, y_obj, z_obj + Z_LIFT_M])
+            p_brida_post = p_grip_post - R_target @ t_grip
+            
+            if self._plan_pose(p_brida_post[0], p_brida_post[1], p_brida_post[2], quat, 'POST-PICK-LIFT'):
+                self._exec_plan()
+
             return True
         return False
 
@@ -275,7 +284,14 @@ class PickAndPlaceNode(Node):
         self._mover_gripper(cerrar=False)
         time.sleep(0.5)
 
-        if self._plan_pose(p_brida_pre[0], p_brida_pre[1], p_brida_pre[2], quat, 'POST-PLACE'): self._exec_plan()
+        # --- NUEVO: RETRACCIÓN DE 5 CM ANTES DE IR A POSICIÓN SEGURA ---
+        self.get_logger().info('👆 Subiendo 5cm (Retracción segura en Place)...')
+        p_grip_post = np.array([x_target, y_target, z_target + Z_LIFT_M])
+        p_brida_post = p_grip_post - R_target @ t_grip
+        
+        if self._plan_pose(p_brida_post[0], p_brida_post[1], p_brida_post[2], quat, 'POST-PLACE-LIFT'):
+            self._exec_plan()
+
         return True
 
     def _calcular_pose_objeto(self, punto):

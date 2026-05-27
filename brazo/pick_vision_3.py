@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-pick_and_place.py — Sistema Pick & Place para xArm5 (Sorting por Colores con Retracción)
-========================================================================================
+pick_and_place.py — Sistema Pick & Place para xArm5 (Sorting por Colores con Retracción Garantizada)
+===================================================================================================
 """
 
 import rclpy
@@ -9,7 +9,7 @@ from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 
-from geometry_msgs.msg import PointStamped # IMPORTACIÓN CAMBIADA
+from geometry_msgs.msg import PointStamped 
 from xarm_msgs.srv import PlanPose, PlanExec, PlanJoint
 
 import tf2_ros
@@ -23,7 +23,6 @@ import time
 # ──────────────────────────────────────────────────────────────────────
 # CONFIGURACIÓN DE SORTEO (SORTING)
 # ──────────────────────────────────────────────────────────────────────
-# Asocia la etiqueta de YOLO (color) con el ID del ArUco deseado
 MAPA_COLOR_ARUCO = {
     'red': '6',
     'blue': '7',
@@ -49,7 +48,7 @@ PLACE_OFFSET_Y_M  = 0.00
 
 GRIPPER_LENGTH_M  = 0.170 
 Z_AGARRE_EXTRA_M  = 0.19  
-Z_LIFT_M          = 0.05  # <--- NUEVO: Retracción de seguridad (5cm)
+Z_LIFT_M          = 0.05  
 
 T_BRIDA_CAM = np.array([
     [ 0.,  1.,  0.,  0.067506],
@@ -58,9 +57,6 @@ T_BRIDA_CAM = np.array([
     [ 0.,  0.,  0.,  1.        ]
 ], dtype=np.float64)
 
-# ──────────────────────────────────────────────────────────────────────
-# UTILIDADES MATEMÁTICAS (Sin cambios)
-# ──────────────────────────────────────────────────────────────────────
 def tf_stamped_to_matrix(tf_stamped) -> np.ndarray:
     t, q = tf_stamped.transform.translation, tf_stamped.transform.rotation
     qx, qy, qz, qw = q.x, q.y, q.z, q.w
@@ -90,9 +86,6 @@ def rpy_to_quat(roll, pitch, yaw) -> list:
 def quat_gripper_apuntando_abajo(yaw: float) -> list:
     return rpy_to_quat(math.pi, 0.0, yaw)
 
-# ──────────────────────────────────────────────────────────────────────
-# NODO PRINCIPAL
-# ──────────────────────────────────────────────────────────────────────
 class PickAndPlaceNode(Node):
     def __init__(self):
         super().__init__('xarm5_pick_place')
@@ -107,13 +100,12 @@ class PickAndPlaceNode(Node):
         self._tf_buf = tf2_ros.Buffer()
         self._tf_lst = tf2_ros.TransformListener(self._tf_buf, self)
 
-        # Suscriptores ahora usan PointStamped
         self._sub_cubo = self.create_subscription(PointStamped, 'coordenadas_cubo_3d', self._vision_cb, 10, callback_group=self._cbg)
         self._sub_aruco = self.create_subscription(PointStamped, 'coordenadas_arucos', self._vision_aruco_cb, 10, callback_group=self._cbg)
 
         self._busy             = True
         self._last_cubo_msg    = None
-        self._arucos_vistos    = {}   # Diccionario para guardar múltiples ArUcos: {'6': Point, '7': Point...}
+        self._arucos_vistos    = {}   
         self._z_cubo_guardado  = 0.0  
         self._lock             = threading.Lock()
 
@@ -141,7 +133,6 @@ class PickAndPlaceNode(Node):
 
     def _vision_aruco_cb(self, msg: PointStamped):
         with self._lock:
-            # Guardamos la posición del ArUco usando su ID como llave
             id_aruco = msg.header.frame_id
             self._arucos_vistos[id_aruco] = msg.point
 
@@ -165,7 +156,6 @@ class PickAndPlaceNode(Node):
             color_cubo = msg_cubo.header.frame_id.lower()
             punto_cubo = msg_cubo.point
             
-            # Determinamos el ID del ArUco objetivo según el color
             target_aruco_id = MAPA_COLOR_ARUCO.get(color_cubo)
             
             if not target_aruco_id:
@@ -178,7 +168,7 @@ class PickAndPlaceNode(Node):
             exito_pick = self._ciclo_pick(punto_cubo)
             
             if exito_pick:
-                self.get_logger().info(f'Pick completado. Girando a buscar ArUco ID {target_aruco_id}...')
+                self.get_logger().info(f'Pick completado de forma segura. Girando a buscar ArUco ID {target_aruco_id}...')
                 self._ir_a_buscar_aruco()
                 
                 punto_aruco = self._esperar_deteccion_aruco(target_aruco_id)
@@ -188,15 +178,16 @@ class PickAndPlaceNode(Node):
                     self._ciclo_place(punto_aruco)
                 else:
                     self.get_logger().error(f'No se encontró el ArUco {target_aruco_id} a tiempo. Abortando.')
+            else:
+                self.get_logger().error('Falló la secuencia de Pick. Abortando misión para proteger el brazo.')
 
             self._ir_a_home()
             self._busy = False
             self.get_logger().info('HOME. Listo para el próximo objetivo.\n')
 
     def _esperar_deteccion_aruco(self, target_id: str, timeout_sec=15.0):
-        """Espera a que el ID específico aparezca en el diccionario de visión"""
         with self._lock:
-            self._arucos_vistos.clear() # Limpiamos historial viejo
+            self._arucos_vistos.clear() 
             
         t_start = time.time()
         while time.time() - t_start < timeout_sec:
@@ -243,13 +234,28 @@ class PickAndPlaceNode(Node):
             self._mover_gripper(cerrar=True)
             time.sleep(0.5)
 
-            # --- NUEVO: RETRACCIÓN DE 5 CM ANTES DE IR A POSICIÓN SEGURA ---
-            self.get_logger().info('👆 Subiendo 5cm (Retracción segura en Pick)...')
-            p_grip_post = np.array([x_obj, y_obj, z_obj + Z_LIFT_M])
-            p_brida_post = p_grip_post - R_target @ t_grip
+            # ───────────────────────────────────────────────────────────────
+            # NUEVO: LÓGICA DE RETRACCIÓN ESCALONADA GARANTIZADA (PICK)
+            # ───────────────────────────────────────────────────────────────
+            self.get_logger().info('👆 Ejecutando elevación segura (Pick)...')
+            exito_lift = False
             
-            if self._plan_pose(p_brida_post[0], p_brida_post[1], p_brida_post[2], quat, 'POST-PICK-LIFT'):
-                self._exec_plan()
+            # Intentará 5cm. Si es matemáticamente imposible por lo estirado del brazo, bajará a 4cm, luego a 3cm.
+            alturas_escape = [Z_LIFT_M, 0.04, PICK_OFFSET_Z_M] 
+            
+            for elevacion in alturas_escape:
+                p_grip_post = np.array([x_obj, y_obj, z_obj + elevacion])
+                p_brida_post = p_grip_post - R_target @ t_grip
+                
+                if self._plan_pose(p_brida_post[0], p_brida_post[1], p_brida_post[2], quat, f'ESCAPE-Z({elevacion}m)'):
+                    self._exec_plan()
+                    exito_lift = True
+                    break # Si logra subir, rompe el ciclo y continúa
+                    
+            if not exito_lift:
+                self.get_logger().error('🚨 Imposible levantar el brazo (Singularidad absoluta).')
+                return False # Obliga a detener la misión para no arrastrar el cubo
+            # ───────────────────────────────────────────────────────────────
 
             return True
         return False
@@ -284,13 +290,27 @@ class PickAndPlaceNode(Node):
         self._mover_gripper(cerrar=False)
         time.sleep(0.5)
 
-        # --- NUEVO: RETRACCIÓN DE 5 CM ANTES DE IR A POSICIÓN SEGURA ---
-        self.get_logger().info('👆 Subiendo 5cm (Retracción segura en Place)...')
-        p_grip_post = np.array([x_target, y_target, z_target + Z_LIFT_M])
-        p_brida_post = p_grip_post - R_target @ t_grip
+        # ───────────────────────────────────────────────────────────────
+        # NUEVO: LÓGICA DE RETRACCIÓN ESCALONADA GARANTIZADA (PLACE)
+        # ───────────────────────────────────────────────────────────────
+        self.get_logger().info('👆 Ejecutando elevación segura (Place)...')
+        exito_lift = False
         
-        if self._plan_pose(p_brida_post[0], p_brida_post[1], p_brida_post[2], quat, 'POST-PLACE-LIFT'):
-            self._exec_plan()
+        alturas_escape = [Z_LIFT_M, 0.04, PICK_OFFSET_Z_M] 
+        
+        for elevacion in alturas_escape:
+            p_grip_post = np.array([x_target, y_target, z_target + elevacion])
+            p_brida_post = p_grip_post - R_target @ t_grip
+            
+            if self._plan_pose(p_brida_post[0], p_brida_post[1], p_brida_post[2], quat, f'ESCAPE-Z({elevacion}m)'):
+                self._exec_plan()
+                exito_lift = True
+                break
+                
+        if not exito_lift:
+            self.get_logger().error('🚨 Imposible levantar el brazo (Singularidad absoluta).')
+            return False
+        # ───────────────────────────────────────────────────────────────
 
         return True
 

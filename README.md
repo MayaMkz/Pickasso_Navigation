@@ -1,164 +1,44 @@
-¡Entendido! Vamos a dejar listos los programas con los cambios integrados para que todo funcione a la perfección.
+¡Tienes toda la razón! Es un excelente detalle. Lo que está pasando es que el algoritmo sabía que no podía atravesar el obstáculo, pero nadie le dijo explícitamente que "las paredes" del mapa también son un límite físico para el chasis.
 
-Antes de pasar al código, quiero hacer una pequeña pero importante aclaración técnica sobre tu archivo `setup.py` para evitar confusiones. Mencionas que ahí tienes definido que se abran ciertos comandos para evitar ingresar en varias terminales. En realidad, el bloque `console_scripts` del `setup.py` sirve para "registrar" o dar de alta los nodos en ROS 2, permitiéndote ejecutarlos con el comando `ros2 run pickasso_amr_2d <nombre_del_nodo>`. Sin embargo, el `setup.py` por sí solo no ejecuta múltiples nodos al mismo tiempo. Para abrir todo con un solo comando y evitar las múltiples terminales, se utiliza un archivo "Launch" (que veo que tienes configurado en la carpeta `launch/` de tu paquete).
+Por otro lado, el problema de que ignore el segundo obstáculo está directamente ligado a que sigues usando el `path_to_segments_node`. Como te comenté, ese programa usa la instrucción `time.sleep()`. Cuando el programa entra en "sleep" para esperar a que el carrito termine de avanzar un segmento, **el nodo se congela por completo (se vuelve sordo y ciego)**. Por lo tanto, aunque el cerebro (`planner_node`) calcule una ruta nueva para evadir el segundo obstáculo, tu carrito no lo escucha hasta que termina su movimiento actual.
 
-Aquí tienes los códigos completos ya actualizados, y más abajo los pasos exactos usando el nombre correcto de tu paquete (`pickasso_amr_2d`).
+Además, cambiar esto es vital para evitar los jalones bruscos y proteger la estabilidad de tu brazo xArm5.
 
----
+Aquí tienes la solución definitiva para ambos problemas y cómo adaptar tus terminales.
 
-### **1. Código Completo: `map_node.py**`
+### 1. Limitar el área de trabajo (Modificación a `planner_node.py`)
 
-*Reemplaza todo el contenido de tu `map_node.py` actual con este:*
-
-```python
-import rclpy
-from rclpy.node import Node
-
-from nav_msgs.msg import OccupancyGrid
-from geometry_msgs.msg import Pose, PointStamped
-
-from .config import *
-
-
-class MapNode(Node):
-
-    def __init__(self):
-        super().__init__('map_node')
-
-        self.publisher = self.create_publisher(
-            OccupancyGrid,
-            '/map',
-            10
-        )
-
-        # Suscripción para recibir los clics desde RViz
-        self.dynamic_obstacles = []
-        self.click_sub = self.create_subscription(
-            PointStamped,
-            '/clicked_point',
-            self.click_callback,
-            10
-        )
-
-        self.width_cells = int(AREA_WIDTH / RESOLUTION)
-        self.height_cells = int(AREA_HEIGHT / RESOLUTION)
-
-        self.timer = self.create_timer(1.0, self.publish_map)
-
-        self.get_logger().info("Map Node Started. Listening for /clicked_point...")
-
-    def click_callback(self, msg):
-        # Guardar las coordenadas del clic de RViz
-        self.dynamic_obstacles.append((msg.point.x, msg.point.y))
-        self.get_logger().info(f"Obstáculo visual añadido en X:{msg.point.x:.2f}, Y:{msg.point.y:.2f}")
-        # Forzar una actualización inmediata del mapa
-        self.publish_map()
-
-    def publish_map(self):
-        grid = OccupancyGrid()
-
-        grid.header.frame_id = "map"
-        grid.header.stamp = self.get_clock().now().to_msg()
-
-        grid.info.resolution = RESOLUTION
-        grid.info.width = self.width_cells
-        grid.info.height = self.height_cells
-        grid.info.origin = Pose()
-
-        data = [0] * (self.width_cells * self.height_cells)
-
-        # 1. Dibujar estaciones estáticas
-        for station in STATIONS:
-            cx, cy = station["center"]
-            sx, sy = station["size"]
-
-            min_x = int((cx - sx / 2.0) / RESOLUTION)
-            max_x = int((cx + sx / 2.0) / RESOLUTION)
-            min_y = int((cy - sy / 2.0) / RESOLUTION)
-            max_y = int((cy + sy / 2.0) / RESOLUTION)
-
-            for y in range(max(0, min_y), min(self.height_cells, max_y)):
-                for x in range(max(0, min_x), min(self.width_cells, max_x)):
-                    data[y * self.width_cells + x] = 100
-
-        # 2. Dibujar obstáculos dinámicos (clics)
-        for ox, oy in self.dynamic_obstacles:
-            sx, sy = 0.30, 0.30 # Simulamos cajas de 30x30 cm
-            min_x = int((ox - sx / 2.0) / RESOLUTION)
-            max_x = int((ox + sx / 2.0) / RESOLUTION)
-            min_y = int((oy - sy / 2.0) / RESOLUTION)
-            max_y = int((oy + sy / 2.0) / RESOLUTION)
-
-            for y in range(max(0, min_y), min(self.height_cells, max_y)):
-                for x in range(max(0, min_x), min(self.width_cells, max_x)):
-                    # Evitar errores si se hace clic fuera del mapa
-                    if 0 <= y < self.height_cells and 0 <= x < self.width_cells:
-                        data[y * self.width_cells + x] = 100
-
-        grid.data = data
-        self.publisher.publish(grid)
-
-
-def main(args=None):
-    rclpy.init(args=args)
-    node = MapNode()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
-
-
-if __name__ == '__main__':
-    main()
-
-```
-
----
-
-### **2. Código Completo: `planner_node.py**`
-
-*Reemplaza todo el contenido de tu `planner_node.py` actual con este:*
+Vamos a crear un "muro invisible" alrededor de todo el mapa. Reemplaza **todo** el contenido de tu archivo `planner_node.py` por este. He añadido un bloque en la función `create_grid` que "infla" los bordes del mapa usando las dimensiones exactas de tu robot, garantizando que nunca intente salirse:
 
 ```python
 import rclpy
 from rclpy.node import Node
-
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped, Pose2D, PointStamped
-
 from .config import *
-
 import heapq
 import math
-
 
 class PlannerNode(Node):
 
     def __init__(self):
         super().__init__('planner_node')
-
         self.path_pub = self.create_publisher(Path, '/planned_path', 10)
         self.goal_sub = self.create_subscription(Pose2D, '/goal_pose', self.goal_callback, 10)
         self.pose_sub = self.create_subscription(Pose2D, '/amr_pose', self.pose_callback, 10)
         
-        # Suscripción para recibir los clics de RViz
         self.dynamic_obstacles = []
         self.click_sub = self.create_subscription(
-            PointStamped, 
-            '/clicked_point', 
-            self.click_callback, 
-            10
+            PointStamped, '/clicked_point', self.click_callback, 10
         )
 
         self.width_cells = int(AREA_WIDTH / RESOLUTION)
         self.height_cells = int(AREA_HEIGHT / RESOLUTION)
-
         self.grid = self.create_grid()
-
         self.current_pose = None
         self.goal_pose = None
 
         self.get_logger().info("Planner Node Started")
-        self.get_logger().info("Waiting for /goal_pose and /clicked_point...")
 
     def pose_callback(self, msg):
         self.current_pose = msg
@@ -173,17 +53,13 @@ class PlannerNode(Node):
     def click_callback(self, msg):
         ox, oy = msg.point.x, msg.point.y
         self.dynamic_obstacles.append((ox, oy))
-        self.get_logger().info(f"Obstáculo logístico recibido en X:{ox:.2f}, Y:{oy:.2f}. Actualizando y replanificando...")
+        self.get_logger().info(f"Obstáculo logístico en X:{ox:.2f}, Y:{oy:.2f}.")
 
-        # 1. Reconstruir la malla original limpia
         self.grid = self.create_grid()
 
-        # 2. Añadir los obstáculos dinámicos con su respectivo inflado
         for dox, doy in self.dynamic_obstacles:
-            # Tamaño base (0.30m) + dimensiones del robot y márgenes
             sx = 0.30 + ROBOT_LENGTH + 2.0 * SAFETY_MARGIN
             sy = 0.30 + ROBOT_WIDTH + 2.0 * SAFETY_MARGIN
-
             min_x = int((dox - sx / 2.0) / RESOLUTION)
             max_x = int((dox + sx / 2.0) / RESOLUTION)
             min_y = int((doy - sy / 2.0) / RESOLUTION)
@@ -194,7 +70,6 @@ class PlannerNode(Node):
                     if 0 <= y < self.height_cells and 0 <= x < self.width_cells:
                         self.grid[y][x] = 1
 
-        # 3. Si el robot estaba yendo a un destino, replanificar automáticamente
         if self.goal_pose is not None and self.current_pose is not None:
             self.plan_and_publish()
 
@@ -207,6 +82,17 @@ class PlannerNode(Node):
     def create_grid(self):
         grid = [[0 for _ in range(self.width_cells)] for _ in range(self.height_cells)]
 
+        # --- NUEVO: MUROS INVISIBLES EN LOS BORDES ---
+        margin_x_cells = int((ROBOT_LENGTH / 2.0 + SAFETY_MARGIN) / RESOLUTION)
+        margin_y_cells = int((ROBOT_WIDTH / 2.0 + SAFETY_MARGIN) / RESOLUTION)
+
+        for y in range(self.height_cells):
+            for x in range(self.width_cells):
+                if (x <= margin_x_cells or x >= self.width_cells - margin_x_cells or
+                    y <= margin_y_cells or y >= self.height_cells - margin_y_cells):
+                    grid[y][x] = 1
+        # ---------------------------------------------
+
         for station in STATIONS:
             cx, cy = station["center"]
             sx, sy = station["size"]
@@ -214,7 +100,6 @@ class PlannerNode(Node):
 
             sx = sx + ROBOT_LENGTH + 2.0 * margin
             sy = sy + ROBOT_WIDTH + 2.0 * margin
-
             min_x = int((cx - sx / 2.0) / RESOLUTION)
             max_x = int((cx + sx / 2.0) / RESOLUTION)
             min_y = int((cy - sy / 2.0) / RESOLUTION)
@@ -222,8 +107,8 @@ class PlannerNode(Node):
 
             for y in range(max(0, min_y), min(self.height_cells, max_y)):
                 for x in range(max(0, min_x), min(self.width_cells, max_x)):
-                    grid[y][x] = 1
-
+                    if 0 <= y < self.height_cells and 0 <= x < self.width_cells:
+                        grid[y][x] = 1
         return grid
 
     def heuristic(self, a, b):
@@ -305,7 +190,6 @@ class PlannerNode(Node):
             path_msg.poses.append(pose)
 
         self.path_pub.publish(path_msg)
-        self.get_logger().info(f"Path published with {len(path_msg.poses)} points")
 
 
 def main(args=None):
@@ -320,50 +204,49 @@ if __name__ == '__main__':
 
 ```
 
----
+### 2. Tus nuevos comandos (Despídete del `path_to_segments`)
 
-### **3. Instrucciones de Ejecución Paso a Paso**
+Para solucionar definitivamente lo del segundo obstáculo y los jalones de los motores, vamos a reemplazar los comandos de tu Terminal 2 y 3. Al usar el controlador continuo, el Pickasso no entrará en estado de `sleep`, por lo que **escuchará y evadirá todos los obstáculos que agregues dinámicamente**, uno tras otro, sin detenerse.
 
-**Paso 1: Recompilar los cambios**
-Como modificaste archivos `.py`, debes reconstruir tu espacio de trabajo. Ve a la carpeta raíz de tu workspace (ej. `~/ros2_ws`) y ejecuta:
+Asegúrate de compilar primero con `colcon build` estando en la carpeta `~/x_arm`.
+
+**Terminal 1 (Tu launch habitual - Visualización y simulador):**
 
 ```bash
-colcon build --packages-select pickasso_amr_2d
+cd ~/x_arm/
 source install/setup.bash
+ros2 launch pickasso_amr_2d simulation.launch.py
 
 ```
 
-**Paso 2: Lanzar el sistema**
-Como mencionamos, si no tienes un archivo `.launch.py` configurado todavía, tendrás que usar varias terminales. Abre cada una, recuerda ejecutar `source install/setup.bash` en todas, y usa los siguientes comandos con el nombre de tu paquete (`pickasso_amr_2d`):
+**Terminal 2 (El nuevo conductor, que ajusta en tiempo real):**
 
-* **Terminal 1 (Lógica, Navegación y Comunicación con el carrito físico):**
-Puedes encadenarlos así para ejecutarlos en una sola terminal (aunque se mezclen los logs):
 ```bash
-ros2 run pickasso_amr_2d map_node & ros2 run pickasso_amr_2d planner_node & ros2 run pickasso_amr_2d cmd_vel_udp_bridge_node & ros2 run pickasso_amr_2d trajectory_follower_node
+cd ~/x_arm/
+source install/setup.bash
+ros2 run pickasso_amr_2d path_follower_node
 
 ```
 
+*(Ojo: Ya no usamos el de segments)*.
 
-*(Nota: Reemplacé el simulador por tu puente UDP y utilicé `trajectory_follower_node` que tienes en tu setup.py para tener un control continuo).*
-* **Terminal 2 (Visualización):**
+**Terminal 3 (El puente hacia los motores físicos del carrito):**
+
 ```bash
-ros2 run pickasso_amr_2d robot_marker_node & ros2 run pickasso_amr_2d station_marker_node & rviz2
+cd ~/x_arm/
+source install/setup.bash
+ros2 run pickasso_amr_2d cmd_vel_udp_bridge_node
 
 ```
 
+**Terminal 4 (Para detonar el viaje):**
+Aquí es donde usarás el tópico o el nodo de prueba. Puedes usar tu comando pub de ROS o el script de prueba que tienes diseñado para que publique el destino automáticamente:
 
-* **Terminal 3 (El Detonador de la Prueba):**
 ```bash
+cd ~/x_arm/
+source install/setup.bash
 ros2 run pickasso_amr_2d test_goal_node
 
 ```
 
-
-
-**Paso 3: Probar el obstáculo dinámico en RViz**
-
-1. En RViz, asegúrate de tener las pantallas de **Map**, **Path** y **Markers** activas.
-2. Ejecuta el comando en la Terminal 3 para que el robot trace su ruta y empiece a enviar comandos a la placa física.
-3. En el menú superior de RViz, busca el botón **"Publish Point"**.
-4. Haz clic directamente sobre la línea de la trayectoria verde en el mapa.
-5. ¡Deberías ver aparecer un cuadro negro instantáneamente, la trayectoria actualizarse sola rodeándolo, y tu carrito físico realizar el ajuste en tiempo real!
+¡Haz la prueba colocando 3 o 4 puntos rápidos con la herramienta "Publish Point" en RViz mientras el robot avanza! Verás cómo la línea verde de la trayectoria serpentea para evadirlos sin tocar jamás los bordes de la cuadrícula.

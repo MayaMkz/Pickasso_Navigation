@@ -32,7 +32,7 @@ TARGET_ARUCO_ID = '7' # El único ArUco que nos interesa para descargar
 HOME_JOINTS         = [0.0, 0.0, -2.04, 2.02, 0.0]
 PRE_PLATFORM_JOINTS = [-1.5708, 0.0, -2.04, 2.02, 0.0]
 SEARCH_ARUCO_JOINTS = [1.5708, 0.0, -2.04, 2.02, 0.0] 
-PLATFORM_JOINTS     = [-1.5708, -0.785398, -0.872665, 1.74533, 0.0]
+PLATFORM_JOINTS     = [-1.5708, -0.785398, -0.872665, 1.74533, 0.0] # <--- ¡POR DEFINIR (Calcula y pon los tuyos)!
 
 # Coordenadas articulares para depositar en el carrito (Izquierda, Derecha, Centro)
 POSICIONES_PLATAFORMA = [
@@ -231,11 +231,13 @@ class PickAndPlaceNode(Node):
             self.get_logger().info(f'Trasladando {cubos_en_plataforma} cubos hacia la zona de Place...')
             cubos_descargados = 0
             
-            # --- NUEVO LÓGICA: Ciclo exacto basado en la cantidad de cubos recogidos ---
             for iteracion in range(cubos_en_plataforma):
                 if not rclpy.ok(): break
                 
-                # Vamos a la zona de escaneo de la plataforma
+                # 1. Posición segura antes de buscar en la plataforma
+                self._ir_a_posicion_articular(PRE_PLATFORM_JOINTS)
+                
+                # 2. Vamos a la zona de escaneo de la plataforma
                 self._ir_a_posicion_articular(PLATFORM_JOINTS)
                 
                 cubo_plataforma = self._esperar_cubo(timeout=8.0)
@@ -248,7 +250,13 @@ class PickAndPlaceNode(Node):
                 self.get_logger().info(f'Recogiendo cubo {iteracion + 1} de {cubos_en_plataforma} desde la plataforma...')
 
                 if self._ciclo_pick(cubo_plataforma.point):
+                    
+                    # 3. Posición segura ANTES de ir a buscar el ArUco
+                    self._ir_a_posicion_articular(PRE_PLATFORM_JOINTS)
+                    
                     self.get_logger().info('Girando a buscar ArUco ID 7...')
+                    
+                    # 4. Ir a posición de búsqueda del ArUco
                     self._ir_a_posicion_articular(SEARCH_ARUCO_JOINTS)
                     
                     punto_aruco = self._esperar_deteccion_aruco(TARGET_ARUCO_ID)
@@ -257,15 +265,23 @@ class PickAndPlaceNode(Node):
                         self.get_logger().info('ArUco 7 detectado. Descargando cubo...')
                         if self._ciclo_place_elevado(punto_aruco, cubos_descargados):
                             cubos_descargados += 1
+                            
+                        # 5. Volver a posición de búsqueda de ArUco al finalizar el place
+                        self._ir_a_posicion_articular(SEARCH_ARUCO_JOINTS)
                     else:
                         self.get_logger().error('No se encontró el ArUco 7. Soltando cubo por seguridad.')
                         self._mover_gripper(cerrar=False)
+                        # También regresamos a posición segura si hubo error
+                        self._ir_a_posicion_articular(SEARCH_ARUCO_JOINTS)
 
                 self._busy = False
 
             # Terminamos el ciclo completo de este color
             self.get_logger().info('Lote completamente procesado.')
             self._color_objetivo = None 
+            
+            # 6. Al finalizar todo el ciclo, ir a HOME
+            self.get_logger().info('Regresando a posición HOME final.')
             self._ir_a_posicion_articular(HOME_JOINTS)
 
     def _esperar_cubo(self, timeout=8.0):
@@ -345,13 +361,13 @@ class PickAndPlaceNode(Node):
                     break
                     
             if not exito_lift:
-                self.get_logger().error('Imposible levantar el brazo (Singularidad absoluta).')
+                self.get_logger().error('Imposible levantar el brazo (Singularidad).')
                 return False
             return True
         return False
 
     def _ciclo_place_elevado(self, punto_aruco, offset_iteracion) -> bool:
-        """Place especial que deja caer el cubo por sobre el ArUco con offset iterativo en X"""
+        """Place especial que deja caer el cubo a 10cm sobre el ArUco con offset iterativo en X"""
         resultado = self._calcular_pose_objeto(punto_aruco)
         if not resultado: return False
 
@@ -361,6 +377,7 @@ class PickAndPlaceNode(Node):
         x_target = x_ar + offset_dinamico_x
         y_target = y_ar + PLACE_OFFSET_Y_M
         
+        # Z objetivo es 10 cm estrictamente por encima de la marca del ArUco
         z_target = z_ar + PLACE_ALTURA_Z_M 
 
         yaw = math.atan2(y_target, x_target)
@@ -368,11 +385,13 @@ class PickAndPlaceNode(Node):
         R_target = quat_to_rot_matrix(quat)
         t_grip = np.array([0.0, 0.0, GRIPPER_LENGTH_M])
 
+        # 1. Acercamiento elevado (10 cm + margen)
         p_grip_pre = np.array([x_target, y_target, z_target + PICK_OFFSET_Z_M])
         p_brida_pre = p_grip_pre - R_target @ t_grip
 
         if self._plan_pose(p_brida_pre[0], p_brida_pre[1], p_brida_pre[2], quat, 'PRE-PLACE'): self._exec_plan()
 
+        # 2. Bajada a los 10 cm exactos
         p_grip_place = np.array([x_target, y_target, z_target])
         p_brida_place = p_grip_place - R_target @ t_grip
 
@@ -381,9 +400,11 @@ class PickAndPlaceNode(Node):
         else:
             return False
 
+        # 3. Soltar
         self._mover_gripper(cerrar=False)
         time.sleep(0.5)
 
+        # 4. Retracción segura
         exito_lift = False
         alturas_escape = [Z_LIFT_M, 0.02, PICK_OFFSET_Z_M] 
         for elevacion in alturas_escape:

@@ -30,14 +30,15 @@ TARGET_ARUCO_ID = '7' # El único ArUco que nos interesa para descargar
 # CONFIGURACIÓN DE POSICIONES ARTICULARES (Joints)
 # ──────────────────────────────────────────────────────────────────────
 HOME_JOINTS         = [0.0, 0.0, -2.04, 2.02, 0.0]
+PRE_PLATFORM_JOINTS = [-1.5708, 0.0, -2.04, 2.02, 0.0]
 SEARCH_ARUCO_JOINTS = [1.5708, 0.0, -2.04, 2.02, 0.0] 
-PLATFORM_JOINTS     = [0.0, 0.0, 0.0, 0.0, 0.0] # <--- ¡POR DEFINIR (Calcula y pon los tuyos)!
+PLATFORM_JOINTS     = [-1.5708, -0.785398, -0.872665, 1.74533, 0.0] # <--- ¡POR DEFINIR (Calcula y pon los tuyos)!
 
 # Coordenadas articulares para depositar en el carrito (Izquierda, Derecha, Centro)
 POSICIONES_PLATAFORMA = [
-    [-1.98968, -0.383972, -0.383972, 0.855211, 0.0], # 0: Izquierda
-    [-1.13446, -0.383972, -0.383972, 0.855211, 0.0], # 1: Derecha
-    [-1.5708,  -0.383972, -0.383972, 0.855211, 0.0]  # 2: Centro
+    [-2.0944, -0.628319, -0.174533, 0.802851, 0.0], # 0: Izquierda
+    [-1.16937, -0.628319, -0.174533, 0.802851, 0.0], # 1: Derecha
+    [-1.5708,  -0.698132, -0.148353, 0.8813913, 0.0]  # 2: Centro
 ]
 
 # ──────────────────────────────────────────────────────────────────────
@@ -52,7 +53,7 @@ PICK_OFFSET_Z_M   = 0.03
 PLACE_OFFSET_X_BASE = 0.0  # Primer cubo a 5cm
 PLACE_OFFSET_X_INC  = 0.0  # Incremento de 5cm por cubo
 PLACE_OFFSET_Y_M    = 0.00  
-PLACE_ALTURA_Z_M    = 0.15  # Deja caer el cubo 10 cm por encima del ArUco
+PLACE_ALTURA_Z_M    = 0.05  # Deja caer el cubo 10 cm por encima del ArUco
 
 GRIPPER_LENGTH_M  = 0.170 
 Z_AGARRE_EXTRA_M  = 0.19  
@@ -186,7 +187,7 @@ class PickAndPlaceNode(Node):
             self._ir_a_posicion_articular(HOME_JOINTS)
 
             while cubos_en_plataforma < 3 and rclpy.ok():
-                cubo_encontrado = self._esperar_cubo(timeout=8.0)
+                cubo_encontrado = self._esperar_cubo(timeout=5.0)
                 
                 if cubo_encontrado is None:
                     self.get_logger().info('No se detectan más cubos en la mesa.')
@@ -197,6 +198,7 @@ class PickAndPlaceNode(Node):
 
                 if self._ciclo_pick(cubo_encontrado.point):
                     # Depositar en la plataforma
+                    #self._ir_a_posicion_articular(PRE_PLATFORM_JOINTS)
                     pos_objetivo = POSICIONES_PLATAFORMA[cubos_en_plataforma]
                     self.get_logger().info(f'Colocando cubo en la posición {cubos_en_plataforma} de la plataforma...')
                     
@@ -208,6 +210,7 @@ class PickAndPlaceNode(Node):
                 else:
                     self.get_logger().error('Falló el Pick desde la mesa.')
                 
+                #self._ir_a_posicion_articular(PRE_PLATFORM_JOINTS)
                 self._ir_a_posicion_articular(HOME_JOINTS)
                 self._busy = False
 

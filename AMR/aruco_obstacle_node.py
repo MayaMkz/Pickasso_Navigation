@@ -1,27 +1,35 @@
 """
 aruco_obstacle_node.py — Pickasso AMR | Obstáculo por ArUco ID 10
 =================================================================
-Detecta el ArUco marker ID 10 con la cámara DroidCam y publica
-su posición en coordenadas del mapa como PointStamped en /aruco_obstacle.
+Cámara CENITAL FIJA (DroidCam en techo/poste) apuntando al área de trabajo.
 
-El planner_node escucha /aruco_obstacle igual que /clicked_point (RViz),
-lo agrega al grid y recalcula la ruta automáticamente.
+Con cámara cenital, solvePnP devuelve tvec en el frame de la cámara donde:
+  tvec[0] → X en metros desde el eje óptico (lateral)
+  tvec[1] → Y en metros desde el eje óptico (longitudinal)
+  tvec[2] → Z = altura de la cámara al marcador (constante, no se usa)
+
+Para pasar a coordenadas del mapa solo se necesita UN offset fijo:
+  (CAM_ORIGIN_X, CAM_ORIGIN_Y) = posición del eje óptico de la cámara
+                                   en el sistema de coordenadas del mapa.
+
+Esto se calibra UNA VEZ poniendo el marcador en una posición conocida del mapa
+y ajustando CAM_ORIGIN_X / CAM_ORIGIN_Y hasta que coincida.
+
+NO necesita /amr_pose para ubicar obstáculos — la cámara fija ya conoce
+las coordenadas absolutas del área de trabajo.
 
 Rescatado de Cel8.py:
-  - Conexión DroidCam con CamaraIP_UltraRapida (grab/retrieve, sin lag)
-  - Calibración cargada desde parametros_droidcam.yaml (mismo nombre que Cel8)
-  - Tamaño del marcador: hs = 0.063/2.0  → marcador de 6.3 cm
-  - Diccionario: DICT_4X4_50
-  - DetectorParameters con CORNER_REFINE_SUBPIX + adaptiveThreshWinSizeStep=10
-  - Pose estimada con solvePnP SOLVEPNP_IPPE_SQUARE (mismo método que Cel8)
-
-Dependencias:
-    pip install opencv-contrib-python rclpy
+  - CamaraIP_UltraRapida (grab/retrieve, sin lag de buffer)
+  - calibración desde parametros_droidcam.yaml + fallback focal estimada
+  - cv2.remap para undistort
+  - DICT_4X4_50, CORNER_REFINE_SUBPIX, adaptiveThreshWinSizeStep=10
+  - solvePnP con SOLVEPNP_IPPE_SQUARE y obj_points de 4 esquinas
+  - tamaño de marcador: 0.063 m (6.3 cm lado)
 """
 
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Pose2D, PointStamped
+from geometry_msgs.msg import PointStamped
 from std_msgs.msg import Header
 
 import cv2
@@ -33,7 +41,7 @@ import time
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Clase de cámara rápida — idéntica a Cel8.py para evitar lag de buffer
+# Cámara rápida — idéntica a Cel8.py
 # ─────────────────────────────────────────────────────────────────────────────
 class CamaraIP_UltraRapida:
     def __init__(self, url):
@@ -52,6 +60,7 @@ class CamaraIP_UltraRapida:
             if time.time() - t0 > 8.0:
                 raise Exception("Timeout esperando primer frame de DroidCam.")
             time.sleep(0.05)
+        print("[OK] DroidCam 640×480 en vivo.")
         return self
 
     def _update(self):
@@ -79,29 +88,67 @@ class CamaraIP_UltraRapida:
 # ─────────────────────────────────────────────────────────────────────────────
 class ArucoObstacleNode(Node):
 
-    # ── Configuración ── (mismos valores que Cel8.py) ─────────────────────
-    DROIDCAM_URL    = "http://192.168.137.24:4747/video"   # igual que Cel8
-    CALIB_FILE      = "parametros_droidcam.yaml"           # igual que Cel8
-    TARGET_ID       = 10           # ID que se trata como obstáculo
-    MARKER_SIDE_M   = 0.063        # tamaño físico del marcador (m) — igual que Cel8 (hs*2)
-    DETECTION_HZ    = 10.0         # frecuencia de detección
-    COOLDOWN_S      = 2.0          # segundos entre publicaciones del mismo obstáculo
-    MIN_DIST_NUEVA  = 0.15         # (m) mínimo para considerar obstáculo "nuevo"
-    # ──────────────────────────────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════════
+    #  RED — igual que Cel8.py
+    # ══════════════════════════════════════════════════════════════════════
+    DROIDCAM_URL  = "http://192.168.137.24:4747/video"
+    CALIB_FILE    = "parametros_droidcam.yaml"
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  MARCADOR
+    # ══════════════════════════════════════════════════════════════════════
+    TARGET_ID     = 10       # ID que se trata como obstáculo
+    MARKER_SIDE_M = 0.063    # lado físico del marcador en metros (igual que Cel8)
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  CALIBRACIÓN DE ORIGEN — LO ÚNICO QUE DEBES AJUSTAR
+    # ══════════════════════════════════════════════════════════════════════
+    #
+    #  CAM_ORIGIN_X, CAM_ORIGIN_Y:
+    #    Posición del eje óptico de la cámara en el sistema de coordenadas
+    #    del mapa (config.py). Normalmente es el centro físico del área
+    #    de trabajo si la cámara está centrada, o la esquina si está en un extremo.
+    #
+    #  Cómo calibrar:
+    #    1. Pon el marcador ID 10 en una posición conocida del mapa,
+    #       por ejemplo en (1.50, 1.90) — el centro del área.
+    #    2. Corre el nodo y observa el log "[CRUDO]".
+    #    3. Ajusta CAM_ORIGIN_X = 1.50 - crudo_x
+    #                CAM_ORIGIN_Y = 1.90 - crudo_y
+    #    4. Verifica que "[MAPA]" reporte (1.50, 1.90). Listo.
+    #
+    #  Valor inicial: centro del área de trabajo de config.py
+    #    AREA_WIDTH=3.0 → centro X=1.50
+    #    AREA_HEIGHT=3.8 → centro Y=1.90
+    CAM_ORIGIN_X  = 1.50    # m — ajustar con el procedimiento de arriba
+    CAM_ORIGIN_Y  = 1.90    # m — ajustar con el procedimiento de arriba
+
+    #  CAM_ROTATION_RAD:
+    #    Ángulo de rotación de la cámara respecto al mapa (en radianes).
+    #    0.0  = cámara alineada con los ejes del mapa (+X derecha, +Y arriba)
+    #    Ajustar si el celular/cámara no está perfectamente alineado con el área.
+    CAM_ROTATION_RAD = 0.0  # rad — ajustar si la imagen está rotada
+
+    #  FLIP_X, FLIP_Y:
+    #    Dependiendo de cómo esté montado el celular, puede que los ejes
+    #    de la cámara estén invertidos respecto al mapa.
+    #    Cambiar a -1.0 si el obstáculo aparece en el lado opuesto al real.
+    FLIP_X = 1.0   # 1.0 normal | -1.0 invertir eje X
+    FLIP_Y = 1.0   # 1.0 normal | -1.0 invertir eje Y
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  ANTI-FLOOD
+    # ══════════════════════════════════════════════════════════════════════
+    DETECTION_HZ  = 10.0    # Hz de detección
+    COOLDOWN_S    = 2.0     # segundos mínimos entre publicaciones del mismo punto
+    MIN_DIST_NUEVA = 0.15   # (m) para considerar un obstáculo como "nuevo"
 
     def __init__(self):
         super().__init__('aruco_obstacle_node')
 
-        # Publisher
-        self.obstacle_pub = self.create_publisher(
-            PointStamped, '/aruco_obstacle', 10
-        )
+        self.obstacle_pub = self.create_publisher(PointStamped, '/aruco_obstacle', 10)
 
-        # Pose del robot (para proyectar al mapa)
-        self.robot_pose = None
-        self.create_subscription(Pose2D, '/amr_pose', self._pose_cb, 10)
-
-        # ── Calibración (igual que Cel8.py) ──────────────────────────────
+        # ── Calibración — idéntico a Cel8.py ─────────────────────────────
         fs = cv2.FileStorage(self.CALIB_FILE, cv2.FILE_STORAGE_READ)
         if fs.isOpened():
             self.K = fs.getNode("camera_matrix").mat()
@@ -127,40 +174,33 @@ class ArucoObstacleNode(Node):
         aruco_params.adaptiveThreshWinSizeStep = 10
         self.detector = aruco.ArucoDetector(aruco_dict, aruco_params)
 
-        # obj_points idéntico a Cel8.py
         hs = self.MARKER_SIDE_M / 2.0
         self.obj_points = np.array(
             [[-hs, hs, 0], [hs, hs, 0], [hs, -hs, 0], [-hs, -hs, 0]],
             dtype=np.float32
         )
 
-        # ── Cámara DroidCam ───────────────────────────────────────────────
+        # ── Cámara ───────────────────────────────────────────────────────
         self.get_logger().info(f"Conectando a DroidCam: {self.DROIDCAM_URL}")
         try:
             self.cap = CamaraIP_UltraRapida(self.DROIDCAM_URL).start()
-            self.get_logger().info("[OK] DroidCam conectada. Buscando ArUco ID 10...")
+            self.get_logger().info(
+                f"[OK] Buscando ArUco ID {self.TARGET_ID}...\n"
+                f"     Origen cámara en mapa: ({self.CAM_ORIGIN_X}, {self.CAM_ORIGIN_Y}) m\n"
+                f"     Rotación cámara: {math.degrees(self.CAM_ROTATION_RAD):.1f}°"
+            )
         except Exception as e:
             self.get_logger().error(f"[ERROR cámara] {e}")
             self.cap = None
 
-        # Anti-flood
         self._last_pub_time = 0.0
         self._last_pub_pos  = None
 
-        # Timer de detección
         self.create_timer(1.0 / self.DETECTION_HZ, self._loop)
-
         self.get_logger().info("ArUco Obstacle Node listo.")
 
     # ──────────────────────────────────────────────────────────────────────
-    # Callbacks
-    # ──────────────────────────────────────────────────────────────────────
-
-    def _pose_cb(self, msg):
-        self.robot_pose = msg
-
-    # ──────────────────────────────────────────────────────────────────────
-    # Loop principal de detección
+    # Loop de detección
     # ──────────────────────────────────────────────────────────────────────
 
     def _loop(self):
@@ -171,12 +211,10 @@ class ArucoObstacleNode(Node):
         if frame_raw is None:
             return
 
-        # Undistort — igual que Cel8.py usa cv2.remap
         frame = cv2.remap(frame_raw, self.map1, self.map2, cv2.INTER_LINEAR)
         gray  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         corners, ids, _ = self.detector.detectMarkers(gray)
-
         if ids is None:
             return
 
@@ -185,7 +223,7 @@ class ArucoObstacleNode(Node):
             if mid != self.TARGET_ID:
                 continue
 
-            # ── Estimar pose con solvePnP — idéntico a Cel8.py ──────────
+            # ── solvePnP — idéntico a Cel8.py ────────────────────────────
             ok, rvec, tvec = cv2.solvePnP(
                 self.obj_points,
                 corners[i][0],
@@ -196,87 +234,76 @@ class ArucoObstacleNode(Node):
             if not ok:
                 continue
 
-            # tvec está en el frame de la cámara:
-            #   tvec[0] → lateral  (X cámara, + = derecha)
-            #   tvec[1] → vertical (Y cámara, + = abajo)
-            #   tvec[2] → profundidad (Z cámara, + = lejos)
-            dist_m    = float(tvec[2][0])   # distancia frontal al marcador
-            lateral_m = float(tvec[0][0])   # desplazamiento lateral
+            # Con cámara cenital:
+            #   tvec[0] = X en frame cámara (lateral en la imagen)
+            #   tvec[1] = Y en frame cámara (vertical en la imagen)
+            #   tvec[2] = Z = distancia cámara-marcador (altura, constante)
+            cam_x = float(tvec[0][0]) * self.FLIP_X
+            cam_y = float(tvec[1][0]) * self.FLIP_Y
 
             self.get_logger().info(
-                f"ArUco ID {mid} | dist={dist_m:.2f} m  lateral={lateral_m:.2f} m"
+                f"[CRUDO] ArUco ID {mid} | cam_x={cam_x:.3f} m  cam_y={cam_y:.3f} m  "
+                f"altura={float(tvec[2][0]):.3f} m"
             )
 
-            # ── Proyectar al frame del mapa ──────────────────────────────
-            world_pos = self._cam_to_world(dist_m, lateral_m)
-            if world_pos is None:
-                self.get_logger().warn(
-                    "Pose del robot no disponible todavía — obstáculo no publicado."
-                )
-                return
+            # ── Transformar al frame del mapa ─────────────────────────────
+            wx, wy = self._cam_to_map(cam_x, cam_y)
 
-            wx, wy = world_pos
+            self.get_logger().info(
+                f"[MAPA]  ArUco ID {mid} | X={wx:.3f} m  Y={wy:.3f} m"
+            )
 
-            # ── Cooldown: evitar spam del mismo obstáculo ────────────────
+            # ── Cooldown ──────────────────────────────────────────────────
             now = time.time()
             if self._last_pub_pos is not None:
-                d_ant = math.hypot(wx - self._last_pub_pos[0],
-                                   wy - self._last_pub_pos[1])
-                if d_ant < self.MIN_DIST_NUEVA and (now - self._last_pub_time) < self.COOLDOWN_S:
-                    return
+                d = math.hypot(wx - self._last_pub_pos[0], wy - self._last_pub_pos[1])
+                if d < self.MIN_DIST_NUEVA and (now - self._last_pub_time) < self.COOLDOWN_S:
+                    break
 
-            # ── Publicar ─────────────────────────────────────────────────
-            msg            = PointStamped()
-            msg.header     = Header()
+            # ── Publicar ──────────────────────────────────────────────────
+            msg = PointStamped()
             msg.header.frame_id = "map"
             msg.header.stamp    = self.get_clock().now().to_msg()
-            msg.point.x    = wx
-            msg.point.y    = wy
-            msg.point.z    = 0.0
+            msg.point.x = wx
+            msg.point.y = wy
+            msg.point.z = 0.0
             self.obstacle_pub.publish(msg)
 
             self._last_pub_time = now
             self._last_pub_pos  = (wx, wy)
 
             self.get_logger().info(
-                f"[✓] Obstáculo ArUco ID {mid} → mapa X={wx:.3f} m  Y={wy:.3f} m"
+                f"[✓] Obstáculo publicado → /aruco_obstacle  X={wx:.3f}  Y={wy:.3f}"
             )
-            break  # un obstáculo por frame es suficiente
+            break
 
     # ──────────────────────────────────────────────────────────────────────
-    # Proyección cámara → coordenadas mapa
+    # Transformación cámara cenital → mapa
     # ──────────────────────────────────────────────────────────────────────
 
-    def _cam_to_world(self, dist_m: float, lateral_m: float):
+    def _cam_to_map(self, cam_x: float, cam_y: float) -> tuple:
         """
-        Convierte (distancia frontal, offset lateral) en coordenadas absolutas
-        del mapa usando la pose actual del robot.
+        Cámara cenital fija: la transformación es solo rotación + traslación.
 
-        Se asume cámara mirando hacia adelante del robot
-        (misma dirección que el eje de avance principal del AMR).
-        Si tu cámara está rotada, ajusta cam_offset_angle_rad.
+        El eje óptico de la cámara (0,0) corresponde a (CAM_ORIGIN_X, CAM_ORIGIN_Y)
+        en el mapa. Si la cámara está rotada respecto al mapa, se aplica
+        CAM_ROTATION_RAD antes de sumar el origen.
+
+        Para una cámara perfectamente alineada (CAM_ROTATION_RAD=0):
+            map_x = CAM_ORIGIN_X + cam_x
+            map_y = CAM_ORIGIN_Y + cam_y
         """
-        if self.robot_pose is None:
-            return None
+        cos_r = math.cos(self.CAM_ROTATION_RAD)
+        sin_r = math.sin(self.CAM_ROTATION_RAD)
 
-        rx, ry    = self.robot_pose.x, self.robot_pose.y
-        rtheta    = self.robot_pose.theta
+        rotated_x = cos_r * cam_x - sin_r * cam_y
+        rotated_y = sin_r * cam_x + cos_r * cam_y
 
-        # Posición relativa del obstáculo en frame del robot
-        obs_x_robot =  lateral_m   # lateral: + = derecha del robot
-        obs_y_robot =  dist_m      # frontal: + = adelante del robot
+        map_x = self.CAM_ORIGIN_X + rotated_x
+        map_y = self.CAM_ORIGIN_Y + rotated_y
 
-        # Rotar al frame del mapa con la orientación actual del robot
-        cos_t = math.cos(rtheta)
-        sin_t = math.sin(rtheta)
+        return (map_x, map_y)
 
-        wx = rx + cos_t * obs_x_robot - sin_t * obs_y_robot
-        wy = ry + sin_t * obs_x_robot + cos_t * obs_y_robot
-
-        return (wx, wy)
-
-    # ──────────────────────────────────────────────────────────────────────
-    # Cleanup
     # ──────────────────────────────────────────────────────────────────────
 
     def destroy_node(self):
@@ -285,7 +312,6 @@ class ArucoObstacleNode(Node):
         super().destroy_node()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 def main(args=None):
     rclpy.init(args=args)
     node = ArucoObstacleNode()

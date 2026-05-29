@@ -32,13 +32,13 @@ TARGET_ARUCO_ID = '7' # El único ArUco que nos interesa para descargar
 HOME_JOINTS         = [0.0, 0.0, -2.04, 2.02, 0.0]
 PRE_PLATFORM_JOINTS = [-1.5708, 0.0, -2.04, 2.02, 0.0]
 SEARCH_ARUCO_JOINTS = [1.5708, 0.0, -2.04, 2.02, 0.0] 
-PLATFORM_JOINTS     = [-1.5708, -0.785398, -0.872665, 1.74533, 0.0] # <--- ¡POR DEFINIR (Calcula y pon los tuyos)!
+PLATFORM_JOINTS     = [-1.5708, -0.785398, -0.872665, 1.74533, 0.0]
 
 # Coordenadas articulares para depositar en el carrito (Izquierda, Derecha, Centro)
 POSICIONES_PLATAFORMA = [
     [-2.0944, -0.628319, -0.174533, 0.802851, 0.0], # 0: Izquierda
-    [-1.16937, -0.628319, -0.174533, 0.802851, 0.0], # 1: Derecha
     [-1.5708,  -0.698132, -0.148353, 0.8813913, 0.0]  # 2: Centro
+    [-1.16937, -0.628319, -0.174533, 0.802851, 0.0], # 1: Derecha
 ]
 
 # ──────────────────────────────────────────────────────────────────────

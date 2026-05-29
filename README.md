@@ -1,216 +1,207 @@
-¡Tienes toda la razón! Es un excelente detalle. Lo que está pasando es que el algoritmo sabía que no podía atravesar el obstáculo, pero nadie le dijo explícitamente que "las paredes" del mapa también son un límite físico para el chasis.
+Para lograr que el Pickasso esquive obstáculos de forma fluida y mantenga la estabilidad del manipulador xArm5, debemos dar el salto definitivo del control por segmentos (que bloquea el código con `time.sleep`) a un control cinemático continuo para tus llantas mecanum.
 
-Por otro lado, el problema de que ignore el segundo obstáculo está directamente ligado a que sigues usando el `path_to_segments_node`. Como te comenté, ese programa usa la instrucción `time.sleep()`. Cuando el programa entra en "sleep" para esperar a que el carrito termine de avanzar un segmento, **el nodo se congela por completo (se vuelve sordo y ciego)**. Por lo tanto, aunque el cerebro (`planner_node`) calcule una ruta nueva para evadir el segundo obstáculo, tu carrito no lo escucha hasta que termina su movimiento actual.
+Aquí tienes la guía completa y definitiva con los tres pasos: la actualización de la Raspberry, los ajustes exactos de ROS 2 y los comandos de ejecución.
 
-Además, cambiar esto es vital para evitar los jalones bruscos y proteger la estabilidad de tu brazo xArm5.
+### 1. El Nuevo Cerebro Físico (Script de Raspberry Pi)
 
-Aquí tienes la solución definitiva para ambos problemas y cómo adaptar tus terminales.
+Tu código original leía distancias y se quedaba atrapado en bucles `while` esperando a que los encoders llegaran a la meta. Para escuchar a `cmd_vel_udp_bridge_node`, el script debe calcular las ecuaciones cinemáticas de tus 4 ruedas holonómicas en tiempo real y tener un "freno de emergencia" (watchdog) por si se pierde la conexión WiFi.
 
-### 1. Limitar el área de trabajo (Modificación a `planner_node.py`)
-
-Vamos a crear un "muro invisible" alrededor de todo el mapa. Reemplaza **todo** el contenido de tu archivo `planner_node.py` por este. He añadido un bloque en la función `create_grid` que "infla" los bordes del mapa usando las dimensiones exactas de tu robot, garantizando que nunca intente salirse:
+Reemplaza todo tu script de la Raspberry con esta versión. He respetado la inicialización de tus ESP32, tu IMU y la lógica de direcciones (`1` y `2`) que ya tenías mapeada para tus motores:
 
 ```python
-import rclpy
-from rclpy.node import Node
-from nav_msgs.msg import Path
-from geometry_msgs.msg import PoseStamped, Pose2D, PointStamped
-from .config import *
-import heapq
+import serial
+import time
 import math
+import socket
+import board
+import busio
+import adafruit_bno055
 
-class PlannerNode(Node):
+# =========================
+# CONFIGURACIÓN
+# =========================
 
-    def __init__(self):
-        super().__init__('planner_node')
-        self.path_pub = self.create_publisher(Path, '/planned_path', 10)
-        self.goal_sub = self.create_subscription(Pose2D, '/goal_pose', self.goal_callback, 10)
-        self.pose_sub = self.create_subscription(Pose2D, '/amr_pose', self.pose_callback, 10)
-        
-        self.dynamic_obstacles = []
-        self.click_sub = self.create_subscription(
-            PointStamped, '/clicked_point', self.click_callback, 10
-        )
+UDP_IP = "0.0.0.0"
+UDP_PORT = 5005  # AHORA ESCUCHA EN EL PUERTO DEL CMD_VEL
 
-        self.width_cells = int(AREA_WIDTH / RESOLUTION)
-        self.height_cells = int(AREA_HEIGHT / RESOLUTION)
-        self.grid = self.create_grid()
-        self.current_pose = None
-        self.goal_pose = None
+# Escalamiento: Velocidad máxima de ROS (0.25 m/s) a RPM de tus motores
+VEL_MAX_ROS = 0.25
+RPM_MAX_MOTORES = 25.0
+FACTOR_CONVERSION = RPM_MAX_MOTORES / VEL_MAX_ROS
 
-        self.get_logger().info("Planner Node Started")
+# =========================
+# IMU Y SERIAL ESP32
+# =========================
 
-    def pose_callback(self, msg):
-        self.current_pose = msg
+i2c = busio.I2C(board.SCL, board.SDA)
+sensor_imu = adafruit_bno055.BNO055_I2C(i2c)
 
-    def goal_callback(self, msg):
-        self.goal_pose = msg
-        if self.current_pose is None:
-            self.get_logger().warn("Cannot plan: /amr_pose not received yet")
-            return
-        self.plan_and_publish()
-        
-    def click_callback(self, msg):
-        ox, oy = msg.point.x, msg.point.y
-        self.dynamic_obstacles.append((ox, oy))
-        self.get_logger().info(f"Obstáculo logístico en X:{ox:.2f}, Y:{oy:.2f}.")
+def obtener_yaw():
+    try:
+        yaw = sensor_imu.euler[0]
+        if yaw is not None:
+            return yaw
+    except Exception:
+        pass
+    return 0.0
 
-        self.grid = self.create_grid()
+try:
+    esp_1 = serial.Serial('/dev/ttyUSB0', 115200, timeout=0.1)
+    esp_2 = serial.Serial('/dev/ttyUSB1', 115200, timeout=0.1)
+    time.sleep(2)
+    print("ESP32 conectadas.")
+except Exception as e:
+    print(f"Error serial: {e}")
+    exit()
 
-        for dox, doy in self.dynamic_obstacles:
-            sx = 0.30 + ROBOT_LENGTH + 2.0 * SAFETY_MARGIN
-            sy = 0.30 + ROBOT_WIDTH + 2.0 * SAFETY_MARGIN
-            min_x = int((dox - sx / 2.0) / RESOLUTION)
-            max_x = int((dox + sx / 2.0) / RESOLUTION)
-            min_y = int((doy - sy / 2.0) / RESOLUTION)
-            max_y = int((doy + sy / 2.0) / RESOLUTION)
+def mandar_orden(placa, motor, direccion, rpm):
+    comando = f"{motor},{direccion},{round(abs(rpm), 1)}\n"
+    placa.write(comando.encode("utf-8"))
 
-            for y in range(max(0, min_y), min(self.height_cells, max_y)):
-                for x in range(max(0, min_x), min(self.width_cells, max_x)):
-                    if 0 <= y < self.height_cells and 0 <= x < self.width_cells:
-                        self.grid[y][x] = 1
+def frenar_y_limpiar():
+    mandar_orden(esp_1, "A", 0, 0)
+    mandar_orden(esp_1, "B", 0, 0)
+    mandar_orden(esp_2, "A", 0, 0)
+    mandar_orden(esp_2, "B", 0, 0)
+    esp_1.reset_input_buffer()
+    esp_2.reset_input_buffer()
 
-        if self.goal_pose is not None and self.current_pose is not None:
-            self.plan_and_publish()
+# =========================
+# UDP Y CONTROL CONTINUO MECANUM
+# =========================
 
-    def world_to_grid(self, x, y):
-        return int(x / RESOLUTION), int(y / RESOLUTION)
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.bind((UDP_IP, UDP_PORT))
+# Watchdog: Frena si no recibe comandos de ROS en 0.5 segundos
+sock.settimeout(0.5) 
 
-    def grid_to_world(self, gx, gy):
-        return gx * RESOLUTION, gy * RESOLUTION
+print(f"Escuchando velocidades continuas en puerto {UDP_PORT}")
+print("Esperando conexión de ROS 2...")
 
-    def create_grid(self):
-        grid = [[0 for _ in range(self.width_cells)] for _ in range(self.height_cells)]
+try:
+    while True:
+        try:
+            data, addr = sock.recvfrom(1024)
+            msg = data.decode("utf-8").strip()
+            
+            partes = msg.split(",")
+            if len(partes) != 3:
+                continue
 
-        # --- NUEVO: MUROS INVISIBLES EN LOS BORDES ---
-        margin_x_cells = int((ROBOT_LENGTH / 2.0 + SAFETY_MARGIN) / RESOLUTION)
-        margin_y_cells = int((ROBOT_WIDTH / 2.0 + SAFETY_MARGIN) / RESOLUTION)
+            # 1. Extraer velocidades (vx, vy, omega)
+            vx_ros = float(partes[0])
+            vy_ros = float(partes[1])
+            omega_ros = float(partes[2])
 
-        for y in range(self.height_cells):
-            for x in range(self.width_cells):
-                if (x <= margin_x_cells or x >= self.width_cells - margin_x_cells or
-                    y <= margin_y_cells or y >= self.height_cells - margin_y_cells):
-                    grid[y][x] = 1
-        # ---------------------------------------------
+            # 2. Cinemática Inversa Mecanum
+            # FL: Front Left, FR: Front Right, BL: Back Left, BR: Back Right
+            v_fl = vy_ros + vx_ros - omega_ros
+            v_fr = vy_ros - vx_ros + omega_ros
+            v_bl = vy_ros - vx_ros - omega_ros
+            v_br = vy_ros + vx_ros + omega_ros
 
-        for station in STATIONS:
-            cx, cy = station["center"]
-            sx, sy = station["size"]
-            margin = TABLE_SAFETY_MARGIN if station["name"] == "table" else SAFETY_MARGIN
+            # 3. Escalar a RPM
+            rpm_fl = v_fl * FACTOR_CONVERSION
+            rpm_fr = v_fr * FACTOR_CONVERSION
+            rpm_bl = v_bl * FACTOR_CONVERSION
+            rpm_br = v_br * FACTOR_CONVERSION
 
-            sx = sx + ROBOT_LENGTH + 2.0 * margin
-            sy = sy + ROBOT_WIDTH + 2.0 * margin
-            min_x = int((cx - sx / 2.0) / RESOLUTION)
-            max_x = int((cx + sx / 2.0) / RESOLUTION)
-            min_y = int((cy - sy / 2.0) / RESOLUTION)
-            max_y = int((cy + sy / 2.0) / RESOLUTION)
+            # 4. Asignar direcciones respetando tu electrónica
+            # ESP1 (Frontales): Adelante = 2
+            dir_fl = 2 if rpm_fl >= 0 else 1
+            dir_fr = 2 if rpm_fr >= 0 else 1
+            
+            # ESP2 (Traseras): Adelante = 1
+            dir_bl = 1 if rpm_bl >= 0 else 2
+            dir_br = 1 if rpm_br >= 0 else 2
 
-            for y in range(max(0, min_y), min(self.height_cells, max_y)):
-                for x in range(max(0, min_x), min(self.width_cells, max_x)):
-                    if 0 <= y < self.height_cells and 0 <= x < self.width_cells:
-                        grid[y][x] = 1
-        return grid
+            # 5. Enviar instrucciones a las ESP32
+            mandar_orden(esp_1, "A", dir_fl, abs(rpm_fl))
+            mandar_orden(esp_1, "B", dir_fr, abs(rpm_fr))
+            mandar_orden(esp_2, "A", dir_bl, abs(rpm_bl))
+            mandar_orden(esp_2, "B", dir_br, abs(rpm_br))
 
-    def heuristic(self, a, b):
-        return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
+        except socket.timeout:
+            # ROS dejó de transmitir (ej. evasión fallida o meta alcanzada)
+            frenar_y_limpiar()
 
-    def astar(self, start, goal):
-        neighbors = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)]
-        open_set = []
-        heapq.heappush(open_set, (0, start))
-        came_from = {}
-        g_score = {start: 0}
-
-        while open_set:
-            _, current = heapq.heappop(open_set)
-            if current == goal:
-                return self.reconstruct_path(came_from, current)
-
-            for dx, dy in neighbors:
-                nx, ny = current[0] + dx, current[1] + dy
-                if nx < 0 or ny < 0 or nx >= self.width_cells or ny >= self.height_cells:
-                    continue
-                if self.grid[ny][nx] == 1:
-                    continue
-
-                neighbor = (nx, ny)
-                move_cost = math.sqrt(dx ** 2 + dy ** 2)
-                tentative_g = g_score[current] + move_cost
-
-                if neighbor not in g_score or tentative_g < g_score[neighbor]:
-                    came_from[neighbor] = current
-                    g_score[neighbor] = tentative_g
-                    f_score = tentative_g + self.heuristic(neighbor, goal)
-                    heapq.heappush(open_set, (f_score, neighbor))
-        return []
-
-    def reconstruct_path(self, came_from, current):
-        path = [current]
-        while current in came_from:
-            current = came_from[current]
-            path.append(current)
-        path.reverse()
-        return path
-
-    def is_valid_cell(self, cell):
-        gx, gy = cell
-        if gx < 0 or gy < 0 or gx >= self.width_cells or gy >= self.height_cells:
-            return False
-        return self.grid[gy][gx] == 0
-
-    def plan_and_publish(self):
-        start = self.world_to_grid(self.current_pose.x, self.current_pose.y)
-        goal = self.world_to_grid(self.goal_pose.x, self.goal_pose.y)
-
-        if not self.is_valid_cell(start):
-            self.get_logger().warn("Start position is inside inflated obstacle")
-            return
-        if not self.is_valid_cell(goal):
-            self.get_logger().warn("Goal position is inside inflated obstacle")
-            return
-
-        grid_path = self.astar(start, goal)
-        if len(grid_path) == 0:
-            self.get_logger().warn("No path found")
-            return
-
-        path_msg = Path()
-        path_msg.header.frame_id = "map"
-        path_msg.header.stamp = self.get_clock().now().to_msg()
-
-        for gx, gy in grid_path:
-            x, y = self.grid_to_world(gx, gy)
-            pose = PoseStamped()
-            pose.header.frame_id = "map"
-            pose.header.stamp = self.get_clock().now().to_msg()
-            pose.pose.position.x = x
-            pose.pose.position.y = y
-            pose.pose.position.z = 0.0
-            pose.pose.orientation.w = 1.0
-            path_msg.poses.append(pose)
-
-        self.path_pub.publish(path_msg)
-
-
-def main(args=None):
-    rclpy.init(args=args)
-    node = PlannerNode()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
-
-if __name__ == '__main__':
-    main()
+except KeyboardInterrupt:
+    print("Apagando...")
+    frenar_y_limpiar()
+finally:
+    frenar_y_limpiar()
+    esp_1.close()
+    esp_2.close()
+    sock.close()
 
 ```
 
-### 2. Tus nuevos comandos (Despídete del `path_to_segments`)
+---
 
-Para solucionar definitivamente lo del segundo obstáculo y los jalones de los motores, vamos a reemplazar los comandos de tu Terminal 2 y 3. Al usar el controlador continuo, el Pickasso no entrará en estado de `sleep`, por lo que **escuchará y evadirá todos los obstáculos que agregues dinámicamente**, uno tras otro, sin detenerse.
+### 2. Los Ajustes Clave en ROS 2 (Computadora)
 
-Asegúrate de compilar primero con `colcon build` estando en la carpeta `~/x_arm`.
+Asegúrate de que en tu computadora tienes guardados estos tres detalles vitales para que el mapa y el planificador no se atasquen:
 
-**Terminal 1 (Tu launch habitual - Visualización y simulador):**
+**En `config.py`:**
+Verifica que las medidas y márgenes estén configurados así para darle espacio de maniobra al chasis holonómico sin hacer los obstáculos gigantes:
+
+```python
+ROBOT_LENGTH = 0.70
+ROBOT_WIDTH = 0.68
+SAFETY_MARGIN = 0.01
+TABLE_SAFETY_MARGIN = 0.15
+TABLE_SIZE = (0.60, 1.30)
+
+```
+
+**En `planner_node.py`:**
+Asegúrate de que los bordes del mapa sean solo de 1 celda (hacia afuera) y que el sistema envíe una ruta vacía (para activar el frenado) si se bloquea el paso:
+
+```python
+    # En create_grid(): Bordes delgados
+    for y in range(self.height_cells):
+        for x in range(self.width_cells):
+            if x == 0 or x == self.width_cells - 1 or y == 0 or y == self.height_cells - 1:
+                grid[y][x] = 1
+
+    # En plan_and_publish(): Frenado de emergencia
+    grid_path = self.astar(start, goal)
+    if len(grid_path) == 0:
+        self.get_logger().warn("¡Ruta bloqueada! Cancelando.")
+        empty_path = Path()
+        empty_path.header.frame_id = "map"
+        empty_path.header.stamp = self.get_clock().now().to_msg()
+        self.path_pub.publish(empty_path)
+        return
+
+```
+
+**En `path_follower_node.py`:**
+Garantiza que acepta rutas nuevas al instante (quitando el seguro de longitud) y que frena al recibir rutas vacías:
+
+```python
+    # Al inicio de path_callback()
+    if len(new_path) == 0:
+        self.get_logger().warn("¡Ruta vacía! Frenando motores.")
+        self.path_points = []
+        stop_cmd = Twist()
+        self.cmd_pub.publish(stop_cmd)
+        return
+
+    self.path_points = new_path
+    self.current_index = 0
+
+```
+
+*Nota: Después de verificar estos tres archivos, recuerda siempre hacer `colcon build --packages-select pickasso_amr_2d`.*
+
+---
+
+### 3. Comandos de Ejecución (Para Pruebas Reales)
+
+Levanta este sistema en 4 terminales. Ya no usaremos el publicador de segmentos discretos.
+
+**Terminal 1 (Visualización en RViz y Simulador):**
 
 ```bash
 cd ~/x_arm/
@@ -219,7 +210,7 @@ ros2 launch pickasso_amr_2d simulation.launch.py
 
 ```
 
-**Terminal 2 (El nuevo conductor, que ajusta en tiempo real):**
+**Terminal 2 (El Cerebro de Seguimiento Continuo):**
 
 ```bash
 cd ~/x_arm/
@@ -228,9 +219,7 @@ ros2 run pickasso_amr_2d path_follower_node
 
 ```
 
-*(Ojo: Ya no usamos el de segments)*.
-
-**Terminal 3 (El puente hacia los motores físicos del carrito):**
+**Terminal 3 (El Enlace Inalámbrico al Carrito):**
 
 ```bash
 cd ~/x_arm/
@@ -239,8 +228,9 @@ ros2 run pickasso_amr_2d cmd_vel_udp_bridge_node
 
 ```
 
-**Terminal 4 (Para detonar el viaje):**
-Aquí es donde usarás el tópico o el nodo de prueba. Puedes usar tu comando pub de ROS o el script de prueba que tienes diseñado para que publique el destino automáticamente:
+*(Al iniciar este comando, tu Raspberry Pi debería indicar que comenzó a recibir datos).*
+
+**Terminal 4 (Enviar la Orden):**
 
 ```bash
 cd ~/x_arm/
@@ -249,4 +239,4 @@ ros2 run pickasso_amr_2d test_goal_node
 
 ```
 
-¡Haz la prueba colocando 3 o 4 puntos rápidos con la herramienta "Publish Point" en RViz mientras el robot avanza! Verás cómo la línea verde de la trayectoria serpentea para evadirlos sin tocar jamás los bordes de la cuadrícula.
+¡Ahora sí! Mientras el carrito avance por la planta buscando el punto de "Pickup", usa la herramienta de "Publish Point" en RViz para hacer clic frente a la línea verde. Verás al AMR recalcular su rumbo mediante movimientos holonómicos suaves en tiempo real, esquivando todo a su paso sin comprometer su mecánica.

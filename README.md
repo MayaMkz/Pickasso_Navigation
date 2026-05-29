@@ -22,7 +22,7 @@ import adafruit_bno055
 # =========================
 
 UDP_IP = "0.0.0.0"
-UDP_PORT = 5005  # AHORA ESCUCHA EN EL PUERTO DEL CMD_VEL
+UDP_PORT = 5006  
 
 # Escalamiento: Velocidad máxima de ROS (0.25 m/s) a RPM de tus motores
 VEL_MAX_ROS = 0.25

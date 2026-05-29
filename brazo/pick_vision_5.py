@@ -53,7 +53,7 @@ PICK_OFFSET_Z_M   = 0.03
 PLACE_OFFSET_X_BASE = 0.0  # Primer cubo a 5cm
 PLACE_OFFSET_X_INC  = 0.0  # Incremento de 5cm por cubo
 PLACE_OFFSET_Y_M    = 0.00  
-PLACE_ALTURA_Z_M    = 0.05  # Deja caer el cubo 10 cm por encima del ArUco
+PLACE_ALTURA_Z_M    = 0.07  # Deja caer el cubo 10 cm por encima del ArUco
 
 GRIPPER_LENGTH_M  = 0.170 
 Z_AGARRE_EXTRA_M  = 0.19  

@@ -77,7 +77,7 @@ Luego desde la PC:
 ```bash
 # Opción 1: netcat (Linux)
 echo "pickup" | nc -u -w1 192.168.X.X 5006
-
+```
 # Opción 2: si nc no está disponible, instalar
 sudo apt install netcat-openbsd      # Ubuntu/Debian
 brew install netcat                  # Mac
@@ -87,10 +87,11 @@ brew install netcat                  # Mac
 ---
 
 **Secuencia completa de una misión (HOME → PICKUP → CLASSIFICATION → HOME):**
+
 ```bash
 # Terminal 1: Raspberry corriendo el programa
 python3 pickasso_amr.py
-
+```
 # Terminal 2: PC enviando goals uno por uno,
 ```bash
 # Opción 1: netcat (Linux)

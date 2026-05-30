@@ -34,15 +34,15 @@ sudo chmod 666 /dev/ttyUSB0
 sudo chmod 666 /dev/ttyUSB1
 ```
 
-**Copiar el archivo a la Raspberry (desde tu PC):**
-```bash
-scp pickasso_amr.py pi@192.168.X.X:/home/pi/
-```
+
 
 **Conectarse a la Raspberry por SSH:**
 ```bash
-ssh pi@192.168.X.X
+ssh merg@Xarm5.loca1
 ```
+Para esto tienes que estar conectada via ethernet si aplicas local, o desde la raspberry pi connect tambien se puede. O igual este comando sirve si la compu y la raspberry se encuentran en la misma red. EN TODO CASO DE QUE NO 
+
+ssh merg@10.42.0.234
 
 **Correr el programa:**
 ```bash
@@ -79,23 +79,14 @@ hostname -I
 
 Luego desde la PC:
 ```bash
-# Opción 1: netcat (Linux/Mac)
+# Opción 1: netcat (Linux)
 echo "pickup" | nc -u -w1 192.168.X.X 5006
 
 # Opción 2: si nc no está disponible, instalar
 sudo apt install netcat-openbsd      # Ubuntu/Debian
 brew install netcat                  # Mac
 
-# Opción 3: desde Python en la PC (más confiable)
-python3 -c "
-import socket
-s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-s.settimeout(60)
-s.sendto(b'pickup', ('192.168.X.X', 5006))
-resp, _ = s.recvfrom(256)
-print(resp.decode())
-"
-```
+
 
 ---
 

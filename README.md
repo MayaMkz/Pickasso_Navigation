@@ -71,10 +71,6 @@ Esperando goal...
 
 **Desde tu PC — enviar goals (en otra terminal):**
 
-Primero saber la IP de la Raspberry:
-```bash
-# En la Raspberry
-hostname -I
 ```
 
 Luego desde la PC:
@@ -102,9 +98,7 @@ echo "pickup" | nc -u -w1 192.168.X.X 5006
 
 # esperar "OK: llegue" antes de enviar el siguiente
 
-
----
----
+```
 
 **Si quieres que el programa arranque automáticamente al encender la Raspberry:**
 ```bash

@@ -117,7 +117,7 @@ crontab -e
 
 
 Use command line (xArm):
-
+```bash
 cd ~/dev_ws/
 # launch xarm_driver_node:
 ros2 launch xarm_api xarm6_driver.launch.py robot_ip:=192.168.1.117
@@ -135,3 +135,4 @@ ros2 service call /xarm/set_position xarm_msgs/srv/MoveCartesian "{pose: [300, 0
 # joint motion for xArm6: (unit: rad)
 ros2 service call /xarm/set_servo_angle xarm_msgs/srv/MoveJoint "{angles: [-0.58, 0, 0, 0, 0, 0], speed: 0.35, acc: 10, mvtime: 0}"
 Use command line (lite6):
+```

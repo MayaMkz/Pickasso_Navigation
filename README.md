@@ -104,6 +104,7 @@ echo "pickup" | nc -u -w1 192.168.X.X 5006
 
 
 ---
+---
 
 **Si quieres que el programa arranque automáticamente al encender la Raspberry:**
 ```bash

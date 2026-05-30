@@ -1,0 +1,56 @@
+#ifndef PICKASSO_HARDWARE__PICKASSO_SYSTEM_HPP_
+#define PICKASSO_HARDWARE__PICKASSO_SYSTEM_HPP_
+
+#include <vector>
+#include <string>
+#include "hardware_interface/system_interface.hpp"
+#include "hardware_interface/types/hardware_interface_return_values.hpp"
+#include "rclcpp/rclcpp.hpp"
+
+namespace pickasso_hardware
+{
+class PickassoSystemHardware : public hardware_interface::SystemInterface
+{
+public:
+  RCLCPP_SHARED_PTR_DEFINITIONS(PickassoSystemHardware)
+
+  // Inicializa la configuración (lee qué puerto serial usar desde el URDF)
+  hardware_interface::CallbackReturn on_init(
+    const hardware_interface::HardwareInfo & info) override;
+
+  // Exporta los estados que podemos "leer" (posición y velocidad de cada rueda)
+  std::vector<hardware_interface::StateInterface> export_state_interfaces() override;
+
+  // Exporta los comandos que podemos "escribir" (velocidad deseada para cada rueda)
+  std::vector<hardware_interface::CommandInterface> export_command_interfaces() override;
+
+  // Abre el puerto serial con las ESP32
+  hardware_interface::CallbackReturn on_activate(
+    const rclcpp_lifecycle::State & previous_state) override;
+
+  // Cierra el puerto serial
+  hardware_interface::CallbackReturn on_deactivate(
+    const rclcpp_lifecycle::State & previous_state) override;
+
+  // BUCLE PRINCIPAL: Lee "A:1500,B:1450" de la ESP32
+  hardware_interface::return_type read(
+    const rclcpp::Time & time, const rclcpp::Duration & period) override;
+
+  // BUCLE PRINCIPAL: Manda "A,1,50" a la ESP32
+  hardware_interface::return_type write(
+    const rclcpp::Time & time, const rclcpp::Duration & period) override;
+
+private:
+  // Variables para almacenar lo que pide Nav2 y lo que reportan los encoders
+  std::vector<double> hw_commands_; // [rad/s]
+  std::vector<double> hw_positions_; // [rad]
+  std::vector<double> hw_velocities_; // [rad/s]
+
+  // Aquí iría tu objeto de comunicación serial (ej. un file descriptor para /dev/ttyUSB0)
+  int serial_fd_1_; 
+  int serial_fd_2_;
+};
+
+}  // namespace pickasso_hardware
+
+#endif  // PICKASSO_HARDWARE__PICKASSO_SYSTEM_HPP_

@@ -46,7 +46,7 @@ ssh merg@10.42.0.234
 
 **Correr el programa:**
 ```bash
-cd /home/pi
+cd /Carrito
 python3 pickasso_amr.py
 ```
 

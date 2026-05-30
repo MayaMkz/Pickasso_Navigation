@@ -96,35 +96,12 @@ brew install netcat                  # Mac
 python3 pickasso_amr.py
 
 # Terminal 2: PC enviando goals uno por uno,
+```bash
+# Opción 1: netcat (Linux)
+echo "pickup" | nc -u -w1 192.168.X.X 5006
+
 # esperar "OK: llegue" antes de enviar el siguiente
 
-python3 -c "
-import socket, time
-
-IP_RASPI = '192.168.X.X'   # cambia por tu IP real
-PORT     = 5006
-
-s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-s.settimeout(120)   # 2 min máximo por movimiento
-
-mision = ['pickup', 'classification', 'home']
-
-for goal in mision:
-    print(f'Enviando goal: {goal}')
-    s.sendto(goal.encode(), (IP_RASPI, PORT))
-
-    # Confirmación de que empezó a moverse
-    resp, _ = s.recvfrom(256)
-    print(f'  Raspberry: {resp.decode()}')
-
-    # Esperar confirmación de llegada
-    resp, _ = s.recvfrom(256)
-    print(f'  Raspberry: {resp.decode()}')
-    print()
-
-print('Misión completa.')
-"
-```
 
 ---
 
@@ -134,5 +111,5 @@ print('Misión completa.')
 crontab -e
 
 # Agregar esta línea al final
-@reboot sleep 10 && python3 /home/pi/pickasso_amr.py >> /home/pi/amr_log.txt 2>&1
+@reboot sleep 10 && python3 /home/Carrito/pickasso_amr.py >> /home/Carrito/amr_log.txt 2>&1
 ```

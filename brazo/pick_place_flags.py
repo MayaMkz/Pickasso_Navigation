@@ -22,6 +22,15 @@ import threading
 import time
 
 # ──────────────────────────────────────────────────────────────────────
+# CONFIGURACIÓN DE VELOCIDAD Y ACELERACIÓN (Escala 0.0 a 1.0)
+# ──────────────────────────────────────────────────────────────────────
+SPEED_ARTICULAR = 0.20  # 20% de vel máxima para viajes largos (Joints)
+ACC_ARTICULAR   = 0.15  # 15% de aceleración (arranque y frenado suave)
+
+SPEED_CARTESIANA = 0.10 # 15% de vel máxima para movimientos precisos (Pick/Place)
+ACC_CARTESIANA   = 0.10 # 10% de aceleración para no tirar los cubos
+
+# ──────────────────────────────────────────────────────────────────────
 # CONFIGURACIÓN DE COLORES
 # ──────────────────────────────────────────────────────────────────────
 COLORES_VALIDOS = ['red', 'blue', 'pink', 'green']
@@ -335,6 +344,11 @@ class PickAndPlaceNode(Node):
     def _ir_a_posicion_articular(self, joints):
         req = PlanJoint.Request()
         req.target = joints
+        # Velocidades aplicadas
+        
+        req.speed = SPEED_ARTICULAR
+        req.acc = ACC_ARTICULAR
+        
         resp = self._call_srv(self._arm_joint_plan, req, timeout=25.0)
         if resp and resp.success: 
             self._exec_plan()
@@ -455,6 +469,11 @@ class PickAndPlaceNode(Node):
         req.target.position.x, req.target.position.y, req.target.position.z = float(x), float(y), float(z)
         req.target.orientation.x, req.target.orientation.y = float(quat[0]), float(quat[1])
         req.target.orientation.z, req.target.orientation.w = float(quat[2]), float(quat[3])
+
+        # --- NUEVO: ASIGNACIÓN DE VELOCIDAD CARTESIANA ---
+        req.speed = SPEED_CARTESIANA
+        req.acc = ACC_CARTESIANA
+        
         resp = self._call_srv(self._arm_plan, req, timeout=20.0)
         return resp is not None and resp.success
 

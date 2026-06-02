@@ -228,6 +228,11 @@ class PickAndPlaceNode(Node):
                 
             self.get_logger().info(f'Carga completada ({cubos_cargados} cubos). Esperando que el carro viaje a la ESTACIÓN DE PLACE...')
 
+            # --- AVISAR AL COMANDANTE QUE YA CARGAMOS ---
+            msg_estado = String()
+            msg_estado.data = 'pick_completado'
+            self._pub_estado.publish(msg_estado)
+
             # 3. ESPERAR LLEGADA A ESTACIÓN 2 (PLACE)
             en_estacion_place = False
             while rclpy.ok() and not en_estacion_place:
@@ -241,6 +246,11 @@ class PickAndPlaceNode(Node):
 
             # EJECUTAR RUTINA DE ESTACIÓN 2
             self._rutina_estacion_place(cubos_cargados)
+
+            # --- AVISAR AL COMANDANTE QUE YA DESCARGAMOS ---
+            msg_estado = String()
+            msg_estado.data = 'place_completado'
+            self._pub_estado.publish(msg_estado)
 
             # 4. REINICIAR LOTE
             self.get_logger().info('Lote de trabajo completamente procesado y entregado.')
@@ -348,7 +358,6 @@ class PickAndPlaceNode(Node):
         req = PlanJoint.Request()
         req.target = joints
         # Velocidades aplicadas
-        
         req.speed = SPEED_ARTICULAR
         req.acc = ACC_ARTICULAR
         

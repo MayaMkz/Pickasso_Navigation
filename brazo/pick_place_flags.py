@@ -34,7 +34,7 @@ ACC_CARTESIANA   = 0.10 # 10% de aceleración para no tirar los cubos
 # CONFIGURACIÓN DE COLORES
 # ──────────────────────────────────────────────────────────────────────
 COLORES_VALIDOS = ['red', 'blue', 'pink', 'green']
-TARGET_ARUCO_ID = '7' 
+TARGET_ARUCO_ID = '8' 
 
 # ──────────────────────────────────────────────────────────────────────
 # CONFIGURACIÓN DE POSICIONES ARTICULARES (Joints)
@@ -59,9 +59,9 @@ TF_FLANGE = 'link5'
 CAMERA_Z_OFFSET_M = 0.20 
 PICK_OFFSET_Z_M   = 0.03  
 
-PLACE_OFFSET_X_BASE = 0.0  
+PLACE_OFFSET_X_BASE = 0.07  
 PLACE_OFFSET_X_INC  = 0.0  
-PLACE_OFFSET_Y_M    = 0.00  
+PLACE_OFFSET_Y_M    = 0.07  
 PLACE_ALTURA_Z_M    = 0.07  
 
 GRIPPER_LENGTH_M  = 0.170 

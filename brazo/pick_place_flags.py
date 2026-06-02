@@ -131,6 +131,9 @@ class PickAndPlaceNode(Node):
         # Suscriptor de Bandera de Estación
         self._sub_bandera = self.create_subscription(String, 'bandera_estacion', self._bandera_cb, 10, callback_group=self._cbg)
 
+        # --- NUEVO: PUBLICADOR DE ESTADO PARA EL COMANDANTE ---
+        self._pub_estado = self.create_publisher(String, 'estado_brazo', 10)
+        
         self._busy             = True
         self._last_cubo_msg    = None
         self._arucos_vistos    = {}   

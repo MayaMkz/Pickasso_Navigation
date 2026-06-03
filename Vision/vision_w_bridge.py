@@ -23,7 +23,7 @@ class Vision3DNode(Node):
         self.aruco_detector = aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
         
         # --- CONEXIÓN ZMQ A LA RASPBERRY PI ---
-        self.IP_RASP = "192.168.1.XX" # <--- ¡CAMBIA ESTO POR LA IP DE TU RASPBERRY!
+        self.IP_RASP = "192.168.137.131" # <--- ¡CAMBIA ESTO POR LA IP DE TU RASPBERRY!
         self.context = zmq.Context()
         self.zmq_socket = self.context.socket(zmq.SUB)
         self.zmq_socket.connect(f"tcp://{self.IP_RASP}:5555")

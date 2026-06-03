@@ -24,8 +24,9 @@ class Vision3DNode(Node):
         
         # --- CONEXIÓN ZMQ A LA RASPBERRY PI ---
         self.IP_RASP = "192.168.137.131" # <--- ¡CAMBIA ESTO POR LA IP DE TU RASPBERRY!
-        self.context = zmq.Context()
-        self.zmq_socket = self.context.socket(zmq.SUB)
+        
+        self.zqm_context = zmq.Context()
+        self.zmq_socket = self.zqm_context.socket(zmq.SUB)
         self.zmq_socket.connect(f"tcp://{self.IP_RASP}:5555")
         self.zmq_socket.setsockopt_string(zmq.SUBSCRIBE, '')
         
@@ -183,7 +184,7 @@ def main(args=None):
     finally:
         cv2.destroyAllWindows()
         nodo.zmq_socket.close()
-        nodo.context.term()
+        nodo.zmq_context.term() # <--- Asegúrate de cambiar esto también
         nodo.destroy_node()
         rclpy.shutdown()
 

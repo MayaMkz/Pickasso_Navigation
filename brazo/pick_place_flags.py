@@ -10,7 +10,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 
 from geometry_msgs.msg import PointStamped 
-from std_msgs.msg import String  # <--- NUEVO: Para recibir la bandera de la estación
+from std_msgs.msg import String  
 from xarm_msgs.srv import PlanPose, PlanExec, PlanJoint
 
 import tf2_ros
@@ -22,19 +22,10 @@ import threading
 import time
 
 # ──────────────────────────────────────────────────────────────────────
-# CONFIGURACIÓN DE VELOCIDAD Y ACELERACIÓN (Escala 0.0 a 1.0)
-# ──────────────────────────────────────────────────────────────────────
-SPEED_ARTICULAR = 0.20  # 20% de vel máxima para viajes largos (Joints)
-ACC_ARTICULAR   = 0.15  # 15% de aceleración (arranque y frenado suave)
-
-SPEED_CARTESIANA = 0.10 # 15% de vel máxima para movimientos precisos (Pick/Place)
-ACC_CARTESIANA   = 0.10 # 10% de aceleración para no tirar los cubos
-
-# ──────────────────────────────────────────────────────────────────────
 # CONFIGURACIÓN DE COLORES
 # ──────────────────────────────────────────────────────────────────────
 COLORES_VALIDOS = ['red', 'blue', 'pink', 'green']
-TARGET_ARUCO_ID = '8' 
+TARGET_ARUCO_ID = '9' 
 
 # ──────────────────────────────────────────────────────────────────────
 # CONFIGURACIÓN DE POSICIONES ARTICULARES (Joints)
@@ -131,7 +122,7 @@ class PickAndPlaceNode(Node):
         # Suscriptor de Bandera de Estación
         self._sub_bandera = self.create_subscription(String, 'bandera_estacion', self._bandera_cb, 10, callback_group=self._cbg)
 
-        # --- NUEVO: PUBLICADOR DE ESTADO PARA EL COMANDANTE ---
+        # Publicador de Estado
         self._pub_estado = self.create_publisher(String, 'estado_brazo', 10)
         
         self._busy             = True
@@ -321,14 +312,14 @@ class PickAndPlaceNode(Node):
                         cubos_descargados += 1
                     self._ir_a_posicion_articular(SEARCH_ARUCO_JOINTS)
                 else:
-                    self.get_logger().error('No se encontró el ArUco 7. Soltando cubo por seguridad.')
+                    self.get_logger().error('No se encontró el ArUco. Soltando cubo por seguridad.')
                     self._mover_gripper(cerrar=False)
                     self._ir_a_posicion_articular(SEARCH_ARUCO_JOINTS)
 
             self._busy = False
 
     # ────────────────────────────────────────────────────────
-    # FUNCIONES DE MOVIMIENTO BASE (Sin Cambios Estructurales)
+    # FUNCIONES DE MOVIMIENTO BASE
     # ────────────────────────────────────────────────────────
     def _esperar_cubo(self, timeout=8.0):
         t_espera = 0.0
@@ -357,9 +348,6 @@ class PickAndPlaceNode(Node):
     def _ir_a_posicion_articular(self, joints):
         req = PlanJoint.Request()
         req.target = joints
-        # Velocidades aplicadas
-        req.speed = SPEED_ARTICULAR
-        req.acc = ACC_ARTICULAR
         
         resp = self._call_srv(self._arm_joint_plan, req, timeout=25.0)
         if resp and resp.success: 
@@ -482,10 +470,6 @@ class PickAndPlaceNode(Node):
         req.target.orientation.x, req.target.orientation.y = float(quat[0]), float(quat[1])
         req.target.orientation.z, req.target.orientation.w = float(quat[2]), float(quat[3])
 
-        # --- NUEVO: ASIGNACIÓN DE VELOCIDAD CARTESIANA ---
-        req.speed = SPEED_CARTESIANA
-        req.acc = ACC_CARTESIANA
-        
         resp = self._call_srv(self._arm_plan, req, timeout=20.0)
         return resp is not None and resp.success
 

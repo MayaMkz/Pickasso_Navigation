@@ -27,6 +27,7 @@ class Vision3DNode(Node):
         
         self.zqm_context = zmq.Context()
         self.zmq_socket = self.zqm_context.socket(zmq.SUB)
+        self.zmq_socket.setsockopt(zmq.CONFLATE, 1)
         self.zmq_socket.connect(f"tcp://{self.IP_RASP}:5555")
         self.zmq_socket.setsockopt_string(zmq.SUBSCRIBE, '')
         

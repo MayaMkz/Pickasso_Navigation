@@ -23,10 +23,10 @@ class Vision3DNode(Node):
         self.aruco_detector = aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
         
         # --- CONEXIÓN ZMQ A LA RASPBERRY PI ---
-        self.IP_RASP = "192.168.137.131" # <--- ¡CAMBIA ESTO POR LA IP DE TU RASPBERRY!
+        self.IP_RASP = "192.168.137.131" # <--- ¡VERIFICA ESTA IP!
         
-        self.zqm_context = zmq.Context()
-        self.zmq_socket = self.zqm_context.socket(zmq.SUB)
+        self.zmq_context = zmq.Context()
+        self.zmq_socket = self.zmq_context.socket(zmq.SUB)
         self.zmq_socket.setsockopt(zmq.CONFLATE, 1)
         self.zmq_socket.connect(f"tcp://{self.IP_RASP}:5555")
         self.zmq_socket.setsockopt_string(zmq.SUBSCRIBE, '')
@@ -68,13 +68,14 @@ class Vision3DNode(Node):
         if paquete is None:
             return
 
-        # --- RECONSTRUCCIÓN DE DATOS RECIBIDOS ---
-        # Decodificamos el JPG de regreso a una matriz de imagen
-        np_img = np.frombuffer(paquete['color'], dtype=np.uint8)
-        frame = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+        # --- RECONSTRUCCIÓN DE DATOS RECIBIDOS (COMPRIMIDOS) ---
+        # Decodificamos el JPG de regreso a una matriz de color
+        np_img_color = np.frombuffer(paquete['color'], dtype=np.uint8)
+        frame = cv2.imdecode(np_img_color, cv2.IMREAD_COLOR)
         
-        # Reconstruimos la matriz de profundidad (640x480 en 16-bits)
-        imagen_profundidad = np.frombuffer(paquete['depth'], dtype=np.uint16).reshape((480, 640))
+        # Descomprimimos el PNG a matriz de profundidad respetando los 16-bits
+        np_img_depth = np.frombuffer(paquete['depth'], dtype=np.uint8)
+        imagen_profundidad = cv2.imdecode(np_img_depth, cv2.IMREAD_ANYDEPTH)
         
         depth_scale = paquete['scale']
         intrin = paquete['intrinsics']
@@ -107,7 +108,7 @@ class Vision3DNode(Node):
                     prof_bruta_ar = np.median(valores_validos_ar)
                     prof_m_ar = prof_bruta_ar * depth_scale
                     
-                    # Cálculo Pinhole Manual (Sustituye a rs2_deproject_pixel_to_point)
+                    # Cálculo Pinhole Manual
                     Z = float(prof_m_ar)
                     X = (centro_x_ar - intrin['ppx']) * Z / intrin['fx']
                     Y = (centro_y_ar - intrin['ppy']) * Z / intrin['fy']
@@ -155,7 +156,7 @@ class Vision3DNode(Node):
                 profundidad_bruta = np.median(valores_validos)
                 profundidad_m = profundidad_bruta * depth_scale
 
-                # Cálculo Pinhole Manual (Sustituye a rs2_deproject_pixel_to_point)
+                # Cálculo Pinhole Manual
                 Z = float(profundidad_m)
                 X = (centro_x - intrin['ppx']) * Z / intrin['fx']
                 Y = (centro_y - intrin['ppy']) * Z / intrin['fy']
@@ -185,7 +186,7 @@ def main(args=None):
     finally:
         cv2.destroyAllWindows()
         nodo.zmq_socket.close()
-        nodo.zmq_context.term() # <--- Asegúrate de cambiar esto también
+        nodo.zmq_context.term() # Typo corregido aquí
         nodo.destroy_node()
         rclpy.shutdown()
 

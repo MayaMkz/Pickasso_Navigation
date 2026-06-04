@@ -14,7 +14,7 @@ import time
 # ================================================================
 OFFSET_LLEGADA = {
     'pick':    0.20,   # 20cm antes del ArUco de pick
-    'classif': 0.20,   # 20cm antes del ArUco de classif
+    'classif': 0.15,   # 20cm antes del ArUco de classif
     'home':    0.00,   # home no tiene caja, llega exacto
 }
 
@@ -142,7 +142,7 @@ def ejecutar_motor_rutas(navigator, nodo, destino_input):
     exito_total = True
 
     for parada in puntos_a_visitar:
-        if no navegar_a_dinamico(navigator, nodo, parada):
+        if not navegar_a_dinamico(navigator, nodo, parada):
             exito_total = False
             break
         # Actualizamos la estación actual paso a paso

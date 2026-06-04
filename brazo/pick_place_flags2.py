@@ -31,7 +31,7 @@ TARGET_ARUCO_ID = '9'
 # CONFIGURACIÓN DE POSICIONES ARTICULARES (Joints)
 # ──────────────────────────────────────────────────────────────────────
 HOME_JOINTS         = [0.0, 0.0, -2.04, 2.02, 0.0]
-HOME_MOVIMIENTO     = [0.0, -1.2566, -0.0873, 1.3614, 0.0]  # NUEVO HOME DE TRANSPORTE
+HOME_MOVIMIENTO     = [0.0, -1.2566, -0.0873, 1.3614, 0.0]  # HOME DE TRANSPORTE
 PRE_PLATFORM_JOINTS = [-1.5708, 0.0, -2.04, 2.02, 0.0]
 SEARCH_ARUCO_JOINTS = [1.5708, 0.0, -2.04, 2.02, 0.0] 
 PLATFORM_JOINTS     = [-1.5708, -0.785398, -0.872665, 1.74533, 0.0] 
@@ -180,7 +180,7 @@ class PickAndPlaceNode(Node):
     def _hilo_logica(self):
         self._esperar_servicios()
         
-        # CAMBIO: Iniciamos en posición compacta de transporte
+        # 1. Al arrancar el sistema, nos plegamos para estar listos para viajar
         self._ir_a_posicion_articular(HOME_MOVIMIENTO)
         
         self._mover_gripper(cerrar=False)
@@ -212,21 +212,26 @@ class PickAndPlaceNode(Node):
             
             self.get_logger().info('¡Llegamos a la ESTACIÓN DE PICK! Iniciando carga del carrito...')
             
-            # EJECUTAR RUTINA DE ESTACIÓN 1
+            # EJECUTAR RUTINA DE ESTACIÓN 1 (Inicia y termina en HOME_JOINTS internamente)
             cubos_cargados = self._rutina_estacion_pick()
             
             if cubos_cargados == 0:
                 self.get_logger().info('No se cargó ningún cubo. Se aborta la orden actual.')
                 self._color_objetivo = None
                 with self._lock: self._estacion_actual = 'ninguna'
+                self._ir_a_posicion_articular(HOME_MOVIMIENTO) # Plegado por seguridad ante aborto
                 continue
                 
-            self.get_logger().info(f'Carga completada ({cubos_cargados} cubos). Esperando que el carro viaje a la ESTACIÓN DE PLACE...')
+            self.get_logger().info(f'Carga completada ({cubos_cargados} cubos). Preparando postura de viaje...')
 
-            # --- AVISAR AL COMANDANTE QUE YA CARGAMOS ---
+            # --- AQUI: PLEGADO DE SEGURIDAD ANTES DE MOVER EL CARRO ---
+            self._ir_a_posicion_articular(HOME_MOVIMIENTO)
+
+            # --- AVISAR AL COMANDANTE QUE YA CARGAMOS Y ESTAMOS PLEGADOS ---
             msg_estado = String()
             msg_estado.data = 'pick_completado'
             self._pub_estado.publish(msg_estado)
+            self.get_logger().info('Esperando que el carro viaje a la ESTACIÓN DE PLACE...')
 
             # 3. ESPERAR LLEGADA A ESTACIÓN 2 (PLACE)
             en_estacion_place = False
@@ -241,8 +246,13 @@ class PickAndPlaceNode(Node):
 
             # EJECUTAR RUTINA DE ESTACIÓN 2
             self._rutina_estacion_place(cubos_cargados)
+            
+            self.get_logger().info('Descarga completada. Preparando postura de viaje...')
 
-            # --- AVISAR AL COMANDANTE QUE YA DESCARGAMOS ---
+            # --- AQUI: PLEGADO DE SEGURIDAD ANTES DE REGRESAR A CASA ---
+            self._ir_a_posicion_articular(HOME_MOVIMIENTO)
+
+            # --- AVISAR AL COMANDANTE QUE YA DESCARGAMOS Y ESTAMOS PLEGADOS ---
             msg_estado = String()
             msg_estado.data = 'place_completado'
             self._pub_estado.publish(msg_estado)
@@ -251,9 +261,6 @@ class PickAndPlaceNode(Node):
             self.get_logger().info('Lote de trabajo completamente procesado y entregado.')
             self._color_objetivo = None 
             with self._lock: self._estacion_actual = 'completado' # Reseteamos la bandera
-            
-            # CAMBIO: Regresamos a posición de transporte al terminar
-            self._ir_a_posicion_articular(HOME_MOVIMIENTO)
 
     # ────────────────────────────────────────────────────────
     # SUBRUTINAS DE ESTACIÓN
@@ -262,8 +269,8 @@ class PickAndPlaceNode(Node):
         """Fase 1: Escanea la mesa y carga los cubos en la plataforma del carro"""
         cubos_en_plataforma = 0
         
-        # CAMBIO: Partimos de la posición de transporte
-        self._ir_a_posicion_articular(HOME_MOVIMIENTO)
+        # Desplegamos el robot para iniciar la operación visual y de recolección
+        self._ir_a_posicion_articular(HOME_JOINTS)
 
         while cubos_en_plataforma < 3 and rclpy.ok():
             cubo_encontrado = self._esperar_cubo(timeout=5.0)
@@ -286,8 +293,8 @@ class PickAndPlaceNode(Node):
             else:
                 self.get_logger().error('Falló el Pick desde la mesa.')
             
-            # CAMBIO: Nos volvemos a plegar después de cada recolección
-            self._ir_a_posicion_articular(HOME_MOVIMIENTO)
+            # Regresa al home de operación para buscar el siguiente cubo
+            self._ir_a_posicion_articular(HOME_JOINTS)
             self._busy = False
             
         return cubos_en_plataforma
@@ -295,6 +302,9 @@ class PickAndPlaceNode(Node):
     def _rutina_estacion_place(self, cantidad_cubos: int):
         """Fase 2: Toma los cubos de la plataforma y los pone sobre el ArUco"""
         cubos_descargados = 0
+        
+        # Transición segura: de HOME de viaje a HOME operativo antes de ir a plataforma
+        self._ir_a_posicion_articular(HOME_JOINTS)
         
         for iteracion in range(cantidad_cubos):
             if not rclpy.ok(): break

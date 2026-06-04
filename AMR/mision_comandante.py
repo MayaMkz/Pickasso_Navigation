@@ -10,8 +10,7 @@ import threading
 import time
 
 # ================================================================
-#  Offset de llegada por estación (metros).
-#  El robot se detiene a esta distancia ANTES del ArUco.
+#  Offset de llegada por estación (metros) - Lógica de Coordinates
 # ================================================================
 OFFSET_LLEGADA = {
     'pick':    0.20,   # 20cm antes del ArUco de pick
@@ -22,17 +21,40 @@ OFFSET_LLEGADA = {
 YAW_FIJO = 1.57
 
 def euler_a_quaternion(yaw):
-    return 0.0, 0.0, math.sin(yaw / 2.0), math.cos(yaw / 2.0)
+    return 0.0, 0.0, math.sin(yaw/2.0), math.cos(yaw/2.0)
 
 class NodoComandante(Node):
     def __init__(self):
         super().__init__('nodo_comandante_logistico')
         self.pub_bandera = self.create_publisher(String, '/bandera_estacion', 10)
         self.sub_estado = self.create_subscription(String, '/estado_brazo', self.estado_cb, 10)
+        
         self.estado_brazo = None
+        self.estacion_actual = 'home' # Rastreador de posición
         
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+        
+        # --- MEMORIA CONSTANTE DE ARUCOS ---
+        self.memoria_estaciones = {}
+        self.timer_memoria = self.create_timer(0.5, self._actualizar_memoria)
+
+    def _actualizar_memoria(self):
+        """Vigila constantemente el TF y guarda la última posición conocida de cada ArUco"""
+        for estacion in ['home', 'pick', 'classif']:
+            frame = f'estacion_{estacion}'
+            try:
+                # Intenta atrapar el TF si está visible en este momento
+                trans = self.tf_buffer.lookup_transform('map', frame, rclpy.time.Time())
+                x = trans.transform.translation.x
+                y = trans.transform.translation.y
+                q = trans.transform.rotation
+                yaw = math.atan2(2*(q.w*q.z + q.x*q.y), 1 - 2*(q.y*q.y + q.z*q.z))
+                
+                # Actualiza la memoria con las coordenadas más frescas
+                self.memoria_estaciones[estacion] = (x, y, yaw)
+            except Exception:
+                pass # Si no lo ve, no hace nada, mantiene el último guardado
 
     def estado_cb(self, msg):
         self.estado_brazo = msg.data.strip()
@@ -49,42 +71,26 @@ class NodoComandante(Node):
             time.sleep(0.1)
         self.estado_brazo = None 
 
-    def leer_tf_estacion(self, nombre):
-        """
-        Lee posición + orientación del ArUco de la estación dinámicamente.
-        Retorna (x, y, yaw) o (None, None, None).
-        """
-        frame = f'estacion_{nombre}'
-        try:
-            trans = self.tf_buffer.lookup_transform('map', frame, rclpy.time.Time(), timeout=Duration(seconds=1.5))
-            x = trans.transform.translation.x
-            y = trans.transform.translation.y
-            q = trans.transform.rotation
-            yaw = math.atan2(2*(q.w*q.z + q.x*q.y), 1 - 2*(q.y*q.y + q.z*q.z))
-            return x, y, yaw
-        except Exception:
-            return None, None, None
+    def leer_posicion_aruco(self, nombre):
+        """Retorna las coordenadas desde la memoria constante"""
+        if nombre in self.memoria_estaciones:
+            return self.memoria_estaciones[nombre]
+        return None, None, None
 
 def aplicar_offset(x_aruco, y_aruco, yaw_aruco, offset_m):
-    """
-    Calcula posición de llegada desplazada offset_m metros
-    en dirección +Y del tag.
-    """
+    """Calcula posición desplazada en dirección opuesta al frente de la caja"""
     dx = -math.sin(yaw_aruco) * offset_m
     dy =  math.cos(yaw_aruco) * offset_m
     return x_aruco + dx, y_aruco + dy
 
 def navegar_a_dinamico(navigator, nodo, destino):
-    print(f"\n[*] Viajando hacia '{destino.upper()}'")
-    
-    # 1. Leer ArUco (100% dinámico)
-    x_aruco, y_aruco, yaw_aruco = nodo.leer_tf_estacion(destino)
+    """Viaje a un solo punto aplicando offsets"""
+    x_aruco, y_aruco, yaw_aruco = nodo.leer_posicion_aruco(destino)
     
     if x_aruco is None:
-        print(f"\n[!] ERROR: No se pudo leer '{destino}'. ¿La cámara vio el ArUco?")
+        print(f"\n[!] ERROR: No se tiene registro de '{destino}'. ¿La cámara vio el ArUco?")
         return False
 
-    # 2. Aplicar Offset
     offset = OFFSET_LLEGADA.get(destino, 0.0)
     if offset > 0.0 and yaw_aruco is not None:
         x_goal, y_goal = aplicar_offset(x_aruco, y_aruco, yaw_aruco, offset)
@@ -94,7 +100,6 @@ def navegar_a_dinamico(navigator, nodo, destino):
         x_goal, y_goal = x_aruco, y_aruco
         print(f"\n[+] {destino.upper()}: coordenada ({x_goal:.2f},{y_goal:.2f})")
 
-    # 3. Crear Pose y Navegar (Siempre usando YAW_FIJO)
     goal_pose = PoseStamped()
     goal_pose.header.frame_id = 'map'
     goal_pose.header.stamp = navigator.get_clock().now().to_msg()
@@ -107,6 +112,7 @@ def navegar_a_dinamico(navigator, nodo, destino):
     goal_pose.pose.orientation.z = qz
     goal_pose.pose.orientation.w = qw
 
+    print(f"[*] Viajando hacia '{destino.upper()}'")
     navigator.goToPose(goal_pose)
 
     while not navigator.isTaskComplete():
@@ -122,6 +128,30 @@ def navegar_a_dinamico(navigator, nodo, destino):
     else:
         print(f"[X] Falló el viaje a {destino.upper()}. Abortando ruta.")
         return False
+
+def ejecutar_motor_rutas(navigator, nodo, destino_input):
+    """Implementa la lógica exacta del via-point de coordinates.py"""
+    puntos_a_visitar = []
+    
+    if nodo.estacion_actual == 'pick' and destino_input == 'classif':
+        print("\n[!] VIA-POINT ACTIVADO: Pick -> Home -> Classif")
+        puntos_a_visitar = ['home', 'classif']
+    else:
+        puntos_a_visitar = [destino_input]
+
+    exito_total = True
+
+    for parada in puntos_a_visitar:
+        if no navegar_a_dinamico(navigator, nodo, parada):
+            exito_total = False
+            break
+        # Actualizamos la estación actual paso a paso
+        nodo.estacion_actual = parada
+
+    if exito_total and len(puntos_a_visitar) > 1:
+        print(f"\n[✔] Ruta compuesta hacia {destino_input.upper()} completada!")
+        
+    return exito_total
 
 def main():
     rclpy.init()
@@ -143,33 +173,26 @@ def main():
         print("\nNOTA: Ve a la terminal del Brazo (Pick & Place) y escribe el color a recolectar primero.")
         input(">> Presiona ENTER cuando el brazo ya esté esperando el carrito... ")
 
-        # Refrescar TF
-        for _ in range(15):
-            rclpy.spin_once(nodo_comunicaciones, timeout_sec=0.05)
-
-        # 1. Viaje a Pick
-        if navegar_a_dinamico(navigator, nodo_comunicaciones, 'pick'):
+        # 1. Ejecutar Viaje a Pick (Automáticamente será solo [pick])
+        if ejecutar_motor_rutas(navigator, nodo_comunicaciones, 'pick'):
             nodo_comunicaciones.publicar_bandera('pick')
             
-            print("[Comandante] Esperando a que el xArm5 termine de cargar el carro...")
+            print("\n[Comandante] Esperando a que el xArm5 termine de cargar el carro...")
             nodo_comunicaciones.esperar_confirmacion_brazo('pick_completado')
             print("[Comandante] ¡Carga confirmada por el brazo!")
 
-            # 2. VIA-POINT: Viaje a Home antes de ir a Classif
-            print("\n[!] VIA-POINT ACTIVADO: Pick -> Home -> Classif")
-            if navegar_a_dinamico(navigator, nodo_comunicaciones, 'home'):
+            # 2. Ejecutar Viaje a Place 
+            # (El motor de rutas detectará que estamos en Pick e insertará 'home' automáticamente)
+            if ejecutar_motor_rutas(navigator, nodo_comunicaciones, 'classif'):
+                nodo_comunicaciones.publicar_bandera('place')
                 
-                # 3. Viaje a Place (Classif)
-                if navegar_a_dinamico(navigator, nodo_comunicaciones, 'classif'):
-                    nodo_comunicaciones.publicar_bandera('place')
-                    
-                    print("[Comandante] Esperando a que el xArm5 termine de descargar...")
-                    nodo_comunicaciones.esperar_confirmacion_brazo('place_completado')
-                    print("[Comandante] ¡Descarga confirmada por el brazo!")
+                print("\n[Comandante] Esperando a que el xArm5 termine de descargar...")
+                nodo_comunicaciones.esperar_confirmacion_brazo('place_completado')
+                print("[Comandante] ¡Descarga confirmada por el brazo!")
 
-                    # 4. Retorno a Home final
-                    navegar_a_dinamico(navigator, nodo_comunicaciones, 'home')
-                    print("\n[✔] Ruta compuesta completada! Pickasso en reposo.")
+                # 3. Retorno a Home final
+                ejecutar_motor_rutas(navigator, nodo_comunicaciones, 'home')
+                print("\n[✔] Lote finalizado con éxito. Pickasso en reposo.")
 
     navigator.lifecycleShutdown()
     rclpy.shutdown()
